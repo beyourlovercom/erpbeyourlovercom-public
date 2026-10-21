@@ -21,7 +21,11 @@ const form = useForm<{preset_key:string|null;method:string;scenario:string;versi
 const selectedPreset = computed(() => props.presets.find(item => item.key === form.preset_key) ?? null)
 const isCustom = computed(() => !form.preset_key)
 function choosePreset(key:string){form.preset_key=key;form.method=props.presets.find(item=>item.key===key)?.label??''}
-function chooseCustom(){form.preset_key=null;if(selectedPreset.value?.label===form.method)form.method=''}
+function chooseCustom(){
+  const priorPresetLabel = selectedPreset.value?.label ?? null
+  form.preset_key = null
+  if (priorPresetLabel !== null && form.method === priorPresetLabel) form.method = ''
+}
 function save(){form.put(`/products/${props.product.id}/packaging`,{preserveScroll:true})}
 function upload(kind:'default'|'rendered'|'example',event:Event){
   const input=event.target as HTMLInputElement
