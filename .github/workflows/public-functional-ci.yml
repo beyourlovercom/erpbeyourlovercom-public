@@ -80,4 +80,11 @@ jobs:
         run: php artisan test tests/Feature/Auth/AuthHomeContractTest.php tests/Feature/Finance/GatewayEconomicsV1Test.php tests/Feature/Finance/PaymentReliabilityClosureV1Test.php tests/Feature/Products/ProductGridExportTest.php --no-ansi
 
       - name: Browserless Vue unit regressions
-        run: ./node_modules/.bin/vitest run resources/js/Pages/Products/Index.test.ts resources/js/Pages/Identity/Users/Index.test.ts --maxWorkers=2
+        shell: bash
+        run: |
+          # Packaging.test.ts is proposed separately in Public Draft PR #2.
+          if test -f resources/js/Pages/Products/Packaging.test.ts; then
+            ./node_modules/.bin/vitest run resources/js/Pages/Products/Index.test.ts resources/js/Pages/Identity/Users/Index.test.ts resources/js/Pages/Products/Packaging.test.ts --maxWorkers=2
+          else
+            ./node_modules/.bin/vitest run resources/js/Pages/Products/Index.test.ts resources/js/Pages/Identity/Users/Index.test.ts --maxWorkers=2
+          fi
