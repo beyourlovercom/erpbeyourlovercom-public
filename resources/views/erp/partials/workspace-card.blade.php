@@ -1,0 +1,1 @@
+<article class="workspace-card {{ $class }}" data-card="{{ $id }}"><header class="card-header"><div><h2>{{ $title }}</h2><span class="card-badge">{{ $badge }}</span></div><button class="collapse-button" data-card-collapse aria-label="收起">⌃</button></header><div class="card-body">{!! $content !!}</div><div class="card-summary"></div></article>

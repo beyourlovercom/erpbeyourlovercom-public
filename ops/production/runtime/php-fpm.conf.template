@@ -1,0 +1,5 @@
+[global]
+pid = /Users/a/AI/production/erp.beyourlover.com/runtime/php-fpm.pid
+error_log = /Users/a/AI/production/erp.beyourlover.com/logs/php-fpm-error.log
+daemonize = no
+include = /Users/a/AI/production/erp.beyourlover.com/service-definitions/php-fpm-pool.conf

@@ -1,0 +1,17 @@
+[erp-production]
+listen = /Users/a/AI/production/erp.beyourlover.com/runtime/php-fpm.sock
+listen.owner = a
+listen.group = staff
+listen.mode = 0660
+pm = dynamic
+pm.max_children = 8
+pm.start_servers = 2
+pm.min_spare_servers = 1
+pm.max_spare_servers = 4
+pm.max_requests = 500
+chdir = /Users/a/AI/production/erp.beyourlover.com
+catch_workers_output = yes
+clear_env = yes
+security.limit_extensions = .php
+php_admin_flag[display_errors] = off
+php_admin_value[error_log] = /Users/a/AI/production/erp.beyourlover.com/logs/php-worker-error.log

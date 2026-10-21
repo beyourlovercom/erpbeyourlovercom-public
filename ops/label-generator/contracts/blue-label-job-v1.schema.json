@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "byl.blue-label.job.v1",
+  "title": "BYL Blue Label Job V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "job_id",
+    "plan_reference",
+    "plan_snapshot_checksum",
+    "template_version",
+    "pi_template_version",
+    "warehouse_code",
+    "warehouse_name",
+    "confirmed_date",
+    "items"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "byl.blue-label.job.v1"
+    },
+    "job_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "plan_reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "plan_snapshot_checksum": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "template_version": {
+      "const": "blue-label-picture-master-v1"
+    },
+    "pi_template_version": {
+      "const": "007-pi-sea-canonical-v1"
+    },
+    "warehouse_code": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "warehouse_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "confirmed_date": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^$|^[0-9]{4}/[0-9]{2}/[0-9]{2}$"
+    },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 18,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "product_sku",
+          "label_sku",
+          "label_description",
+          "product_name",
+          "restock_qty",
+          "units_per_carton",
+          "carton_count",
+          "packaging_length_cm",
+          "packaging_width_cm",
+          "packaging_height_cm",
+          "packaged_weight_kg",
+          "quantity_available"
+        ],
+        "properties": {
+          "product_sku": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "label_sku": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]+$",
+            "maxLength": 128
+          },
+          "label_description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "product_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "restock_qty": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "units_per_carton": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "carton_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "packaging_length_cm": {
+            "type": [
+              "string",
+              "number",
+              "null"
+            ]
+          },
+          "packaging_width_cm": {
+            "type": [
+              "string",
+              "number",
+              "null"
+            ]
+          },
+          "packaging_height_cm": {
+            "type": [
+              "string",
+              "number",
+              "null"
+            ]
+          },
+          "packaged_weight_kg": {
+            "type": [
+              "string",
+              "number",
+              "null"
+            ]
+          },
+          "quantity_available": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  }
+}

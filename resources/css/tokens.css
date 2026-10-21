@@ -1,0 +1,155 @@
+:root {
+    --byl-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+    --byl-font-size-10: 0.625rem;
+    --byl-font-size-12: 0.75rem;
+    --byl-font-size-14: 0.875rem;
+    --byl-font-size-18: 1.125rem;
+    --byl-font-size-20: 1.25rem;
+    --byl-font-size-24: 1.5rem;
+    --byl-font-size-30: 1.875rem;
+    --byl-font-size-36: 2.25rem;
+    --byl-font-size-48: 3rem;
+    --byl-font-weight-medium: 500;
+    --byl-font-weight-semibold: 600;
+    --byl-font-weight-bold: 700;
+    --byl-font-weight-extrabold: 800;
+    --byl-line-tight: 1.25;
+    --byl-line-normal: 1.5;
+    --byl-line-copy: 1.7;
+
+    --byl-space-0: 0;
+    --byl-space-4: 4px;
+    --byl-space-6: 6px;
+    --byl-space-8: 8px;
+    --byl-space-9: 9px;
+    --byl-space-10: 10px;
+    --byl-space-12: 12px;
+    --byl-space-14: 14px;
+    --byl-space-16: 16px;
+    --byl-space-18: 18px;
+    --byl-space-20: 20px;
+    --byl-space-22: 22px;
+    --byl-space-24: 24px;
+    --byl-space-26: 26px;
+    --byl-space-28: 28px;
+    --byl-space-30: 30px;
+    --byl-space-48: 48px;
+    --byl-space-56: 56px;
+    --byl-space-64: 64px;
+
+    --byl-border-width: 1px;
+    --byl-radius-xs: 4px;
+    --byl-radius-sm: 6px;
+    --byl-radius-md: 7px;
+    --byl-radius-lg: 8px;
+    --byl-radius-xl: 14px;
+    --byl-radius-2xl: 16px;
+    --byl-radius-round: 9999px;
+    --byl-focus-width: 3px;
+    --byl-focus-offset: 2px;
+    --byl-control-min-height: 36px;
+    --byl-shell-rail-width: 92px;
+    --byl-shell-sidebar-width: 220px;
+    --byl-shell-topbar-height: 76px;
+    --byl-content-reading-width: 760px;
+    --byl-motion-fast: 150ms;
+    --byl-motion-shell: 180ms;
+    --byl-motion-ease: ease;
+    --byl-shadow-card: 0 4px 18px rgb(32 49 59 / 0.04);
+    --byl-shadow-elevated: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+    --byl-shadow-foundation: 0 25px 50px -12px rgb(8 51 68 / 0.20);
+
+    --byl-color-white: #ffffff;
+    --byl-color-shell-canvas: #eef2f4;
+    --byl-color-shell-ink: #20313b;
+    --byl-color-shell-nav: #0b202b;
+    --byl-color-shell-nav-text: #d9e8ed;
+    --byl-color-shell-nav-muted: #9eb5bf;
+    --byl-color-shell-nav-hover: #143642;
+    --byl-color-shell-nav-active: #174b50;
+    --byl-color-shell-nav-marker: #65d5c5;
+    --byl-color-shell-text-secondary: #667881;
+    --byl-color-shell-text-muted: #526670;
+    --byl-color-shell-control: #35515c;
+    --byl-color-shell-border-subtle: #dce4e7;
+    --byl-color-shell-border-control: #71818a;
+    --byl-color-shell-accent: #277d78;
+    --byl-color-shell-accent-hover: #174b50;
+    --byl-color-shell-focus: #277d78;
+    --byl-color-shell-status-bg: #dff3ef;
+    --byl-color-shell-status-ink: #174b50;
+    --byl-color-shell-readonly-bg: #f3f6f7;
+    --byl-color-shell-readonly-ink: #526670;
+    --byl-color-shell-backdrop: rgb(7 21 29 / 0.70);
+
+    --byl-color-auth-canvas: #07111f;
+    --byl-color-auth-surface: #020617;
+    --byl-color-auth-panel: rgb(7 17 31 / 0.80);
+    --byl-color-auth-text: #f1f5f9;
+    --byl-color-auth-text-secondary: #cbd5e1;
+    --byl-color-auth-text-muted: #94a3b8;
+    --byl-color-auth-border: #64748b;
+    --byl-color-auth-accent: #67e8f9;
+    --byl-color-auth-accent-hover: #a5f3fc;
+    --byl-color-auth-accent-ink: #020617;
+    --byl-color-auth-danger: #fda4af;
+    --byl-color-auth-focus: #67e8f9;
+    --byl-color-auth-grid: rgb(22 52 74 / 0.20);
+    --byl-color-auth-orbit: rgb(42 145 166 / 0.33);
+    --byl-color-auth-node: #8be9e4;
+    --byl-color-auth-glow: #54d6d0;
+    --byl-color-auth-line: rgb(95 215 207 / 0.53);
+    --byl-color-auth-brand-muted: #9db6c6;
+    --byl-color-auth-status-muted: #8da8b8;
+    --byl-color-auth-online: #65e2b2;
+    --byl-color-auth-panel-border: #1d3a4d;
+
+    --byl-color-foundation-surface: rgb(15 23 42 / 0.80);
+    --byl-color-foundation-border: #1e293b;
+    --byl-color-foundation-action-border: rgb(34 211 238 / 0.50);
+    --byl-color-foundation-action-hover: rgb(34 211 238 / 0.10);
+    --byl-color-foundation-shadow: rgb(8 51 68 / 0.20);
+
+    --byl-canvas: var(--byl-color-shell-canvas, #eef2f4);
+    --byl-surface: var(--byl-color-white, #ffffff);
+    --byl-text: var(--byl-color-shell-ink, #20313b);
+    --byl-text-secondary: var(--byl-color-shell-text-secondary, #667881);
+    --byl-text-muted: var(--byl-color-shell-text-muted, #526670);
+    --byl-border-subtle: var(--byl-color-shell-border-subtle, #dce4e7);
+    --byl-border-control: var(--byl-color-shell-border-control, #71818a);
+    --byl-accent: var(--byl-color-shell-accent, #277d78);
+    --byl-accent-hover: var(--byl-color-shell-accent-hover, #174b50);
+    --byl-accent-ink: var(--byl-color-white, #ffffff);
+    --byl-focus-ring: var(--byl-color-shell-focus, #277d78);
+    --byl-status-bg: var(--byl-color-shell-status-bg, #dff3ef);
+    --byl-status-ink: var(--byl-color-shell-status-ink, #174b50);
+    --byl-readonly-bg: var(--byl-color-shell-readonly-bg, #f3f6f7);
+    --byl-readonly-ink: var(--byl-color-shell-readonly-ink, #526670);
+    --byl-danger: #be123c;
+}
+
+[data-byl-theme="dark"] {
+    --byl-canvas: var(--byl-color-auth-canvas, #07111f);
+    --byl-surface: var(--byl-color-auth-surface, #020617);
+    --byl-text: var(--byl-color-auth-text, #f1f5f9);
+    --byl-text-secondary: var(--byl-color-auth-text-secondary, #cbd5e1);
+    --byl-text-muted: var(--byl-color-auth-text-muted, #94a3b8);
+    --byl-border-subtle: var(--byl-color-foundation-border, #1e293b);
+    --byl-border-control: var(--byl-color-auth-border, #64748b);
+    --byl-accent: var(--byl-color-auth-accent, #67e8f9);
+    --byl-accent-hover: var(--byl-color-auth-accent-hover, #a5f3fc);
+    --byl-accent-ink: var(--byl-color-auth-accent-ink, #020617);
+    --byl-focus-ring: var(--byl-color-auth-focus, #67e8f9);
+    --byl-status-bg: #12353b;
+    --byl-status-ink: #a5f3fc;
+    --byl-readonly-bg: #111827;
+    --byl-readonly-ink: #cbd5e1;
+    --byl-danger: var(--byl-color-auth-danger, #fda4af);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :root {
+        --byl-motion-fast: 0ms;
+        --byl-motion-shell: 0ms;
+    }
+}

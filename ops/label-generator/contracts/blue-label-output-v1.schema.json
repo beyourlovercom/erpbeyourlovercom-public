@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "byl.blue-label.output.v1",
+  "title": "BYL Blue Label Output V1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generator_version",
+    "job_id",
+    "plan_reference",
+    "plan_snapshot_checksum",
+    "template_version",
+    "template_sha256",
+    "source_job_sha256",
+    "generated_at_utc",
+    "runtime",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "byl.blue-label.output.v1"
+    },
+    "generator_version": {
+      "const": "blue-label-runtime-v1"
+    },
+    "job_id": {
+      "type": "string"
+    },
+    "plan_reference": {
+      "type": "string"
+    },
+    "plan_snapshot_checksum": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "template_version": {
+      "const": "blue-label-picture-master-v1"
+    },
+    "template_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "source_job_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "generated_at_utc": {
+      "type": "string"
+    },
+    "runtime": {
+      "type": "object"
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "product_sku",
+          "label_sku",
+          "restock_qty",
+          "btw",
+          "pdf",
+          "btw_sha256",
+          "pdf_sha256",
+          "label_size_mm",
+          "artwork_px",
+          "barcode"
+        ],
+        "properties": {
+          "product_sku": {
+            "type": "string"
+          },
+          "label_sku": {
+            "type": "string"
+          },
+          "label_description": {
+            "type": "string"
+          },
+          "restock_qty": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "btw": {
+            "type": "string"
+          },
+          "pdf": {
+            "type": "string"
+          },
+          "btw_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "pdf_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "label_size_mm": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "const": 50
+              },
+              {
+                "const": 30
+              }
+            ],
+            "items": false
+          },
+          "artwork_px": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "const": 591
+              },
+              {
+                "const": 354
+              }
+            ],
+            "items": false
+          },
+          "barcode": {
+            "const": "Code128B"
+          }
+        }
+      }
+    },
+    "erp_package": {
+      "type": "object",
+      "properties": {
+        "pi": {
+          "const": "PI.xlsx"
+        },
+        "pi_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "worker_output_root": {
+          "type": "string"
+        },
+        "storage": {
+          "const": "erp_private_local_v1"
+        },
+        "zip": {
+          "type": "string"
+        },
+        "zip_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    }
+  }
+}

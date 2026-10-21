@@ -1,0 +1,58 @@
+worker_processes 1;
+pid /Users/a/AI/production/erp.beyourlover.com/runtime/nginx-origin.pid;
+error_log /Users/a/AI/production/erp.beyourlover.com/logs/nginx-origin-error.log warn;
+
+events {
+    worker_connections 128;
+}
+
+http {
+    map $http_x_erp_request_id $erp_request_id {
+        "~^[A-Za-z0-9._:-]{8,128}$" $http_x_erp_request_id;
+        default $request_id;
+    }
+
+    log_format erp_combined '$remote_addr - $remote_user [$time_local] "$request" '
+        '$status $body_bytes_sent "$http_referer" "$http_user_agent" '
+        'request_id=$erp_request_id app_request_id=$upstream_http_x_erp_request_id '
+        'request_time=$request_time upstream_time=$upstream_response_time';
+    access_log /Users/a/AI/production/erp.beyourlover.com/logs/nginx-origin-access.log erp_combined;
+    include /opt/homebrew/etc/nginx/mime.types;
+    default_type application/octet-stream;
+    sendfile on;
+    keepalive_timeout 65;
+    server_tokens off;
+
+    server {
+        listen 127.0.0.1:18080;
+        server_name erp.beyourlover.com;
+        root /Users/a/AI/production/erp.beyourlover.com/current/public;
+        index index.php;
+        client_max_body_size 32m;
+        add_header X-ERP-Request-ID $erp_request_id always;
+
+        set_real_ip_from 127.0.0.1;
+        real_ip_header CF-Connecting-IP;
+        real_ip_recursive on;
+
+        location / {
+            try_files $uri $uri/ /index.php?$query_string;
+        }
+
+        location ~ \.php$ {
+            try_files $uri =404;
+            include /opt/homebrew/etc/nginx/fastcgi_params;
+            fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+            fastcgi_param DOCUMENT_ROOT $realpath_root;
+            fastcgi_param HTTPS on;
+            fastcgi_param HTTP_X_FORWARDED_PROTO https;
+            fastcgi_param HTTP_X_ERP_REQUEST_ID $erp_request_id;
+            fastcgi_hide_header X-ERP-Request-ID;
+            fastcgi_pass unix:/Users/a/AI/production/erp.beyourlover.com/runtime/php-fpm.sock;
+        }
+
+        location ~ /\.(?!well-known).* {
+            deny all;
+        }
+    }
+}

@@ -1,0 +1,41 @@
+{
+  "schema_version": "byl.blue-label.job.v1",
+  "job_id": "BL-UAT-001",
+  "plan_reference": "RP-USSM-20260920-000001",
+  "plan_snapshot_checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "template_version": "blue-label-picture-master-v1",
+  "pi_template_version": "007-pi-sea-canonical-v1",
+  "warehouse_code": "US-SM",
+  "warehouse_name": "美国3世迈仓",
+  "confirmed_date": "2026/09/22",
+  "items": [
+    {
+      "product_sku": "VC549A",
+      "label_sku": "C549A",
+      "label_description": "C549A 磁吸穿戴",
+      "product_name": "VC549A 磁吸穿戴裸机玫红色成品 APP款",
+      "restock_qty": 10,
+      "units_per_carton": 5,
+      "carton_count": 2,
+      "packaging_length_cm": "20.00",
+      "packaging_width_cm": "10.00",
+      "packaging_height_cm": "5.00",
+      "packaged_weight_kg": "0.300",
+      "quantity_available": 2
+    },
+    {
+      "product_sku": "CA755B",
+      "label_sku": "CA755B",
+      "label_description": "CA755B DOMINUS",
+      "product_name": "CA755B DOMINUS",
+      "restock_qty": 3,
+      "units_per_carton": null,
+      "carton_count": null,
+      "packaging_length_cm": null,
+      "packaging_width_cm": null,
+      "packaging_height_cm": null,
+      "packaged_weight_kg": null,
+      "quantity_available": 0
+    }
+  ]
+}

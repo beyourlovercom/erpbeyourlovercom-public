@@ -1,0 +1,35 @@
+{
+    "$schema": "https://www.schemastore.org/package.json",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "build": "vite build",
+        "dev": "vite",
+        "test": "vitest run",
+        "test:e2e": "node tests/e2e/support/run-e2e.mjs",
+        "test:e2e:contracts": "node --test tests/e2e/support/artifact-scan.test.mjs",
+        "test:e2e:direct": "playwright test --project=chromium",
+        "typecheck": "vue-tsc --noEmit",
+        "typecheck:e2e": "tsc --noEmit -p tsconfig.e2e.json"
+    },
+    "devDependencies": {
+        "@inertiajs/vue3": "^3.6.1",
+        "@playwright/test": "1.62.1",
+        "@tailwindcss/vite": "^4.0.0",
+        "@types/node": "^26.1.2",
+        "@vitejs/plugin-vue": "^6.0.8",
+        "@vue/test-utils": "^2.4.11",
+        "concurrently": "^9.0.1",
+        "jsdom": "^30.0.1",
+        "laravel-vite-plugin": "^3.1",
+        "tailwindcss": "^4.0.0",
+        "typescript": "^6.0.3",
+        "vite": "^8.0.0",
+        "vitest": "^4.1.10",
+        "vue": "^3.5.40",
+        "vue-tsc": "^3.3.8"
+    },
+    "dependencies": {
+        "axios": "^1.19.0"
+    }
+}
