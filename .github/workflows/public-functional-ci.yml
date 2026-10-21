@@ -41,6 +41,15 @@ jobs:
           composer install --no-interaction --prefer-dist --no-progress --no-scripts --no-plugins
           npm ci --no-audit --no-fund
 
+      - name: Match case-sensitive Inertia test page lookup to Vue directory
+        shell: bash
+        run: |
+          # Fix only the ephemeral Linux runner, not deployed Laravel code.
+          # Keep page-existence assertions enabled: the actual files live under Pages.
+          cp vendor/inertiajs/inertia-laravel/config/inertia.php config/inertia.php
+          sed -i "s#resource_path('js/pages')#resource_path('js/Pages')#" config/inertia.php
+          grep -F "resource_path('js/Pages')" config/inertia.php
+
       - name: Make nonsecret ephemeral Laravel config
         shell: bash
         run: |
