@@ -1,0 +1,46 @@
+name: Public Source Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static-validation:
+    name: PHP and JavaScript syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify sanitized publication scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -d AI
+          test ! -d docs
+          test ! -d .opencode
+          test ! -d .codex
+          test ! -f AGENTS.md
+          test ! -f CLAUDE_ENTRYPOINT.md
+          test ! -f CODEX_ENTRYPOINT.md
+          test ! -f .env
+          test -f SECURITY.md
+          test -f PUBLIC_SOURCE_SCOPE.md
+
+      - name: PHP syntax validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          php -v
+          git ls-files -z -- '*.php' | xargs -0 -r -n 1 -P 4 php -l >/dev/null
+
+      - name: JavaScript syntax validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -v
+          git ls-files -z -- '*.js' '*.cjs' '*.mjs' | xargs -0 -r -n 1 node --check
