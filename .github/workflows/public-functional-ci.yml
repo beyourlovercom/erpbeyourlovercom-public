@@ -1,0 +1,74 @@
+name: Public Functional Checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  functional:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      APP_ENV: testing
+      DB_CONNECTION: sqlite
+      DB_DATABASE: ":memory:"
+      DB_URL: ""
+      MAIL_MAILER: array
+      QUEUE_CONNECTION: sync
+      SESSION_DRIVER: array
+      CACHE_STORE: array
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PHP 8.3 test-only environment
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          tools: composer:v2
+          extensions: sqlite3, pdo_sqlite, mbstring, bcmath, gd, intl, zip
+          coverage: none
+
+      - name: Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pinned PHP and JS dependencies
+        run: |
+          composer install --no-interaction --prefer-dist --no-progress --no-scripts --no-plugins
+          npm ci --no-audit --no-fund
+
+      - name: Make nonsecret ephemeral Laravel config
+        shell: bash
+        run: |
+          cat > .env <<'ENV'
+          APP_NAME=ERP-CI
+          APP_ENV=testing
+          APP_DEBUG=true
+          APP_URL=http://localhost
+          DB_CONNECTION=sqlite
+          DB_DATABASE=:memory:
+          DB_URL=
+          MAIL_MAILER=array
+          QUEUE_CONNECTION=sync
+          SESSION_DRIVER=array
+          CACHE_STORE=array
+          ENV
+          php artisan key:generate --no-interaction
+          test -f .env
+          test ! -f .env.production
+
+      - name: TypeScript and Vite production bundle
+        run: |
+          npm run typecheck
+          npm run build
+          test -f public/build/manifest.json
+
+      - name: Isolated PHP feature regressions
+        run: php artisan test tests/Feature/Auth/AuthHomeContractTest.php tests/Feature/Finance/GatewayEconomicsV1Test.php tests/Feature/Finance/PaymentReliabilityClosureV1Test.php tests/Feature/Products/ProductGridExportTest.php --no-ansi
+
+      - name: Browserless Vue unit regressions
+        run: ./node_modules/.bin/vitest run resources/js/Pages/Products/Index.test.ts resources/js/Pages/Identity/Users/Index.test.ts --maxWorkers=2
