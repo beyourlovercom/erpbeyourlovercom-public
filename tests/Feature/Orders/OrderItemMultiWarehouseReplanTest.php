@@ -113,6 +113,64 @@ final class OrderItemMultiWarehouseReplanTest extends TestCase
         );
     }
 
+    public function test_multileg_preflight_reports_atomic_eligibility_without_mutations(): void
+    {
+        [$actor, $order, $products, $warehouses, $holds] = $this->setupSplit();
+        $items = $order->items()->orderBy('id')->get();
+        $revision = app(OrderAmendmentRevision::class)->forOrder($order);
+        $this->actingAs($actor)->postJson("/customers/orders/{$order->id}/items/preview", [
+            'items' => [
+                ['id' => $items[0]->id, 'product_id' => $products['A']->id,
+                    'quantity' => 2, 'unit_price' => '9.99'],
+                ['id' => $items[1]->id, 'product_id' => $products['C']->id,
+                    'quantity' => 3, 'unit_price' => '19.99'],
+            ],
+        ])->assertOk()
+            ->assertJsonPath('can_atomic_multi_replan', true)
+            ->assertJsonPath('can_atomic_single_replan', false)
+            ->assertJsonPath('expected_revision', $revision)
+            ->assertJsonPath('no_writes', true);
+        foreach ($holds as $hold) {
+            $this->assertDatabaseHas('inventory_reservations', ['id' => $hold->id, 'status' => 'reserved']);
+        }
+    }
+
+    public function test_authenticated_multi_replan_http_routes_to_atomic_transaction(): void
+    {
+        [$actor, $order, $products, $warehouses, $holds] = $this->setupSplit();
+        $items = $order->items()->orderBy('id')->get();
+        $this->actingAs($actor)->postJson("/customers/orders/{$order->id}/items/replan-multi", [
+            'items' => [
+                ['id' => $items[0]->id, 'product_id' => $products['A']->id,
+                    'quantity' => 2, 'unit_price' => '9.99'],
+                ['id' => $items[1]->id, 'product_id' => $products['C']->id,
+                    'quantity' => 3, 'unit_price' => '19.99'],
+            ],
+            'assignments' => [
+                ['item_index' => 0, 'source_code' => 'US-LA'],
+                ['item_index' => 1, 'source_code' => 'US-SM'],
+            ],
+            'expected_revision' => app(OrderAmendmentRevision::class)->forOrder($order),
+            'reason' => 'Customer requested replacement color',
+        ])->assertOk()->assertJsonPath('state', 'pending_multi_leg_review')
+            ->assertJsonCount(2, 'new_reservations');
+        $this->assertDatabaseHas('order_items', ['id' => $items[1]->id, 'sku' => 'MULTI-C']);
+    }
+
+    public function test_unauthorized_http_replan_keeps_all_child_reservations_untouched(): void
+    {
+        [$actor, $order, $products, $warehouses, $holds] = $this->setupSplit();
+        $viewer = User::factory()->create(['is_active' => true]);
+        $this->actingAs($viewer)->postJson("/customers/orders/{$order->id}/items/replan-multi", [
+            'items' => [], 'assignments' => [],
+            'expected_revision' => app(OrderAmendmentRevision::class)->forOrder($order),
+            'reason' => 'Not authorized to amend order',
+        ])->assertForbidden();
+        foreach ($holds as $hold) {
+            $this->assertDatabaseHas('inventory_reservations', ['id' => $hold->id, 'status' => 'reserved']);
+        }
+    }
+
     public function test_two_warehouse_replan_swaps_every_child_hold_without_changing_parent_item_ids(): void
     {
         [$actor, $order, $products, $warehouses, $holds] = $this->setupSplit();
