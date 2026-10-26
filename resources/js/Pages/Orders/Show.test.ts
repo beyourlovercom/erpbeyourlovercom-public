@@ -374,11 +374,17 @@ describe('Orders/Show V2', () => {
     await edit!.trigger('click')
     const addButton = wrapper.findAll('button').find(b => b.text().includes('增加商品 / 赠品'))
     await addButton!.trigger('click')
+    // The test's lightweight useForm mock is a plain object (not Inertia's
+    // reactive useForm); explicitly request a render after its array mutation.
+    wrapper.vm.$forceUpdate()
+    await wrapper.vm.$nextTick()
     expect(wrapper.findAll('.ord-item-row')).toHaveLength(2)
     const rows = wrapper.findAll('.ord-item-row')
     expect((rows[1].find('input[type="number"][min="0"]').element as HTMLInputElement).value).toBe('0.00')
     const removeButton = rows[1].findAll('button').find(b => b.text() === '删除商品')
     await removeButton!.trigger('click')
+    wrapper.vm.$forceUpdate()
+    await wrapper.vm.$nextTick()
     expect(wrapper.findAll('.ord-item-row')).toHaveLength(1)
   })
 
