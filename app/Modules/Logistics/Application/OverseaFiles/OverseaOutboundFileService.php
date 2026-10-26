@@ -13,6 +13,7 @@ final class OverseaOutboundFileService
         private readonly Wms64OutboundExporter $wms,
         private readonly MorePlusOutboundExporter $morePlus,
         private readonly CanadaOutboundExporter $canada,
+        private readonly ProviderXlsxWriter $xlsx,
     ) {}
 
     /**
@@ -123,6 +124,57 @@ final class OverseaOutboundFileService
     public function exportReviewed(string $warehouseKey, array $valid): array
     {
         return $this->export($warehouseKey, $valid);
+    }
+
+    /**
+     * Full operator-review draft: all actual order fields and all SKU rows.
+     * This is intentionally NOT a provider template. No data is invented,
+     * truncated, approved, or sent to a warehouse by exporting it.
+     *
+     * @param iterable<Shipment> $shipments
+     * @param list<array{order_id:int|null,order_number:string,reason:string}> $issues
+     * @return array{filename:string,bytes:string}
+     */
+    public function exportReviewDraft(string $warehouseKey, iterable $shipments, array $issues): array
+    {
+        $reasonById = [];
+        foreach ($issues as $issue) {
+            $reasonById[(string) ($issue['order_id'] ?? '')] = $issue['reason'];
+        }
+        $rows = [];
+        foreach ($shipments as $shipment) {
+            $order = $shipment->order;
+            $address = $order?->address;
+            $reason = $reasonById[(string) ($order?->id ?? '')] ?? '';
+            $items = $order?->items ?? collect();
+            $items = $items->isEmpty() ? [null] : $items->all();
+            foreach ($items as $item) {
+                $rows[] = [
+                    (string) ($order?->erp_order_id ?? ''),
+                    (string) ($order?->id ?? ''),
+                    $warehouseKey,
+                    (string) ($address?->recipient_name ?? ''),
+                    (string) ($address?->phone ?? ''),
+                    (string) ($address?->country ?? ''),
+                    (string) ($address?->province_state ?? ''),
+                    (string) ($address?->city ?? ''),
+                    (string) ($address?->postal_code ?? ''),
+                    (string) ($address?->address_line_1 ?? ''),
+                    (string) ($address?->address_line_2 ?? ''),
+                    (string) ($item?->sku ?? ''),
+                    $item?->quantity,
+                    $reason,
+                    $reason === '' ? '合规' : '存在问题-核对后再提交仓库',
+                ];
+            }
+        }
+        return [
+            'filename' => sprintf('007-%s-review-draft-%s.xlsx', $warehouseKey, now()->format('ymd')),
+            'bytes' => $this->xlsx->write('人工核对草稿-不可直接上传仓库', [
+                'ERP订单号', '订单ID', '仓库', '收件人', '电话', '国家', '州省', '城市', '邮编', '地址1', '地址2',
+                'SKU', '数量', '问题原因', '校验状态',
+            ], $rows),
+        ];
     }
 
     /** @param iterable<Shipment> $shipments @return array{filename:string,bytes:string} */
