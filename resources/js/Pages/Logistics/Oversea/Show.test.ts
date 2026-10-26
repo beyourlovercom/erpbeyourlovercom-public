@@ -58,7 +58,7 @@ describe('Oversea Dede file exchange workbench', () => {
     )
     expect(globalFeedback.value.state).toBe('BLOCKED')
     expect(globalFeedback.value.message).toContain('007erp-0920-c40888 缺少电话')
-    expect(wrapper.get('a[href="/logistics/oversea/de-tianyun/export"]').exists()).toBe(true)
+    expect(wrapper.find('a[href="/logistics/oversea/de-tianyun/export"]').exists()).toBe(true)
   })
 
   it('downloads a validated WMS spreadsheet with the server filename and success feedback', async () => {
