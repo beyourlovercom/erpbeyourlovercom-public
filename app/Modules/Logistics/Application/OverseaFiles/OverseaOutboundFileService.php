@@ -13,7 +13,6 @@ final class OverseaOutboundFileService
         private readonly Wms64OutboundExporter $wms,
         private readonly MorePlusOutboundExporter $morePlus,
         private readonly CanadaOutboundExporter $canada,
-        private readonly ProviderXlsxWriter $xlsx,
     ) {}
 
     /**
@@ -64,21 +63,15 @@ final class OverseaOutboundFileService
     }
 
     /**
-     * Keep provider-compliant orders in the provider sheet. Put every skipped
-     * order and its actual validation reason into a separate non-provider sheet.
+     * Only provider-valid rows are placed in the warehouse XLSX. Preserve the
+     * exact one-sheet provider template; export issue data separately in UI.
      *
      * @param list<Shipment> $valid
-     * @param list<array{order_id:int|null,order_number:string,reason:string}> $issues
      * @return array{filename:string,bytes:string}
      */
-    public function exportReviewed(string $warehouseKey, array $valid, array $issues): array
+    public function exportReviewed(string $warehouseKey, array $valid): array
     {
-        $file = $this->export($warehouseKey, $valid);
-        if ($issues !== []) {
-            $file['bytes'] = $this->xlsx->appendIssuesSheet($file['bytes'], $issues);
-        }
-
-        return $file;
+        return $this->export($warehouseKey, $valid);
     }
 
     /** @param iterable<Shipment> $shipments @return array{filename:string,bytes:string} */
