@@ -201,6 +201,77 @@ final class OrderItemMultiWarehouseReplanTest extends TestCase
         $this->assertNotSame($revision, app(OrderAmendmentRevision::class)->forOrder($order));
     }
 
+    public function test_adding_zero_price_gift_creates_third_reserved_pending_warehouse_leg(): void
+    {
+        [$actor, $order, $products, $warehouses, $holds] = $this->setupSplit();
+        $gift = Product::query()->create([
+            'sku' => 'MULTI-GIFT', 'name' => 'Multi free gift', 'source_type' => 'manual',
+            'product_type' => 'simple', 'is_active' => true,
+        ]);
+        WarehouseInventory::query()->create([
+            'warehouse_id' => $warehouses['US-SM']->id, 'product_id' => $gift->id,
+            'quantity_on_hand' => 5, 'quantity_reserved' => 0,
+        ]);
+        $items = $order->items()->orderBy('id')->get();
+        $result = app(OrderItemMultiWarehouseReplanService::class)->commit(
+            $order, [
+                ['id' => $items[0]->id, 'product_id' => $products['A']->id, 'quantity' => 2, 'unit_price' => '9.99'],
+                ['id' => $items[1]->id, 'product_id' => $products['B']->id, 'quantity' => 1, 'unit_price' => '19.99'],
+                ['id' => null, 'product_id' => $gift->id, 'quantity' => 1, 'unit_price' => '0.00'],
+            ],
+            [
+                ['item_index' => 0, 'source_code' => 'US-LA'],
+                ['item_index' => 1, 'source_code' => 'US-NY'],
+                ['item_index' => 2, 'source_code' => 'US-SM'],
+            ],
+            app(OrderAmendmentRevision::class)->forOrder($order),
+            'Customer confirmed a free product gift', $actor,
+        );
+        $this->assertCount(3, $result['new_reservations']);
+        $this->assertCount(3, $order->fresh()->originalFulfillmentChildren);
+        $this->assertDatabaseHas('order_items', [
+            'order_id' => $order->id, 'sku' => 'MULTI-GIFT',
+            'quantity' => 1, 'unit_price' => '0.00',
+        ]);
+        $this->assertSame(1, (int) WarehouseInventory::query()
+            ->where('warehouse_id', $warehouses['US-SM']->id)
+            ->where('product_id', $gift->id)->value('quantity_reserved'));
+        foreach ($holds as $hold) {
+            $this->assertDatabaseHas('inventory_reservations', ['id' => $hold->id, 'status' => 'released']);
+        }
+        foreach ($result['new_reservations'] as $reservation) {
+            $this->assertDatabaseHas('inventory_reservations', [
+                'id' => $reservation['reservation_id'], 'status' => 'reserved',
+            ]);
+        }
+    }
+
+    public function test_duplicate_item_assignments_fail_before_any_reservation_release(): void
+    {
+        [$actor, $order, $products, $warehouses, $holds] = $this->setupSplit();
+        $items = $order->items()->orderBy('id')->get();
+        try {
+            app(OrderItemMultiWarehouseReplanService::class)->commit(
+                $order, [
+                    ['id' => $items[0]->id, 'product_id' => $products['A']->id, 'quantity' => 2, 'unit_price' => '9.99'],
+                    ['id' => $items[1]->id, 'product_id' => $products['B']->id, 'quantity' => 1, 'unit_price' => '19.99'],
+                ],
+                [
+                    ['item_index' => 0, 'source_code' => 'US-LA'],
+                    ['item_index' => 0, 'source_code' => 'US-NY'],
+                ],
+                app(OrderAmendmentRevision::class)->forOrder($order),
+                'Customer requested color changes', $actor
+            );
+            $this->fail('Duplicated item assignment must be rejected');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('assignments', $e->errors());
+        }
+        foreach ($holds as $hold) {
+            $this->assertDatabaseHas('inventory_reservations', ['id' => $hold->id, 'status' => 'reserved']);
+        }
+    }
+
     public function test_second_warehouse_stock_shortage_rolls_back_first_release_and_all_children(): void
     {
         [$actor, $order, $products, $warehouses, $holds] = $this->setupSplit(1);
