@@ -229,7 +229,8 @@ final class OverseaWarehouseWorkbenchTest extends TestCase
         $order = $this->orderAt($warehouses['US-LA'], 'LEGACY-NONCANONICAL-ID');
         $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
 
-        $this->actingAs($user)->get('/logistics/oversea/us-moreplus/export')->assertStatus(422);
+        $this->actingAs($user)->get('/logistics/oversea/us-moreplus/export')
+            ->assertRedirect('/logistics/oversea/us-moreplus?view=pending')->assertSessionHas('error');
     }
 
     public function test_moreplus_export_fails_closed_when_recipient_phone_is_missing(): void
@@ -240,7 +241,42 @@ final class OverseaWarehouseWorkbenchTest extends TestCase
         $order->address()->update(['phone' => '']);
         $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
 
-        $this->actingAs($user)->get('/logistics/oversea/us-moreplus/export')->assertStatus(422);
+        $this->actingAs($user)->get('/logistics/oversea/us-moreplus/export')
+            ->assertRedirect('/logistics/oversea/us-moreplus?view=pending')->assertSessionHas('error');
+    }
+
+    public function test_de_tianyun_export_validation_returns_order_and_field_in_json_without_creating_xlsx(): void
+    {
+        $user = $this->userWith(['logistics.view', 'logistics.operate']);
+        $warehouses = $this->warehouses();
+        $order = $this->orderAt($warehouses['DE'], '007erp-0920-c40888', 'DE');
+        $order->address()->update(['phone' => '']);
+        $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
+
+        $this->actingAs($user)->getJson('/logistics/oversea/de-tianyun/export')
+            ->assertStatus(422)
+            ->assertJsonPath('code', 'OVERSEA_EXPORT_BLOCKED')
+            ->assertJsonPath('message', '订单 007erp-0920-c40888 缺少电话，不能导出仓库文件。');
+
+        // Direct navigation must return to the workbench instead of an unreadable 422 page.
+        $this->actingAs($user)->get('/logistics/oversea/de-tianyun/export')
+            ->assertRedirect('/logistics/oversea/de-tianyun?view=pending')
+            ->assertSessionHas('error', fn ($message) => str_contains((string) $message, '缺少电话'));
+        $this->assertDatabaseHas('shipments', [
+            'order_id' => $order->id, 'shipment_status' => 'pending', 'tracking_number' => null,
+        ]);
+    }
+
+    public function test_export_invalid_reference_preserves_provider_gate_and_exposes_reason_as_json(): void
+    {
+        $user = $this->userWith(['logistics.view', 'logistics.operate']);
+        $warehouses = $this->warehouses();
+        $order = $this->orderAt($warehouses['US-LA'], 'NONCANONICAL-123');
+        $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
+
+        $this->actingAs($user)->getJson('/logistics/oversea/us-moreplus/export')
+            ->assertStatus(422)->assertJsonPath('code', 'OVERSEA_EXPORT_BLOCKED')
+            ->assertJsonPath('message', '订单 NONCANONICAL-123 无法生成海外仓客户参考号');
     }
 
     public function test_pending_moreplus_orders_download_real_xlsx_block_rows(): void
@@ -337,7 +373,8 @@ final class OverseaWarehouseWorkbenchTest extends TestCase
         $order->address()->update(['address_line_1' => str_repeat('A', 36)]);
         $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
 
-        $this->actingAs($user)->get('/logistics/oversea/us-moreplus/export')->assertStatus(422);
+        $this->actingAs($user)->get('/logistics/oversea/us-moreplus/export')
+            ->assertRedirect('/logistics/oversea/us-moreplus?view=pending')->assertSessionHas('error');
     }
 
     public function test_wms_export_fails_closed_above_confirmed_ten_sku_limit(): void
@@ -354,7 +391,8 @@ final class OverseaWarehouseWorkbenchTest extends TestCase
         }
         $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
 
-        $this->actingAs($user)->get('/logistics/oversea/us-ny/export')->assertStatus(422);
+        $this->actingAs($user)->get('/logistics/oversea/us-ny/export')
+            ->assertRedirect('/logistics/oversea/us-ny?view=pending')->assertSessionHas('error');
     }
 
     public function test_wms_and_canada_exports_fail_closed_when_recipient_phone_is_missing(): void
@@ -368,7 +406,7 @@ final class OverseaWarehouseWorkbenchTest extends TestCase
             $order = $this->orderAt($warehouse, $erp, $country);
             $order->address()->update(['phone' => '']);
             $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
-            $this->actingAs($user)->get($url)->assertStatus(422);
+            $this->actingAs($user)->get($url)->assertRedirect()->assertSessionHas('error');
         }
     }
 
