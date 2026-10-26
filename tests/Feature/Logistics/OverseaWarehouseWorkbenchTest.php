@@ -279,6 +279,87 @@ final class OverseaWarehouseWorkbenchTest extends TestCase
             ->assertJsonPath('message', '订单 NONCANONICAL-123 无法生成海外仓客户参考号');
     }
 
+    public function test_de_export_preview_allows_operator_to_continue_with_valid_orders_and_exception_sheet(): void
+    {
+        $user = $this->userWith(['logistics.view', 'logistics.operate']);
+        $warehouses = $this->warehouses();
+        $good = $this->orderAt($warehouses['DE'], '007erp-0920-c40881', 'DE');
+        $bad = $this->orderAt($warehouses['DE'], '007erp-0920-c40882', 'DE');
+        $bad->address()->update(['phone' => '']);
+        foreach ([$good, $bad] as $order) {
+            $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
+        }
+
+        $preview = $this->actingAs($user)->getJson('/logistics/oversea/de-tianyun/export/preview')
+            ->assertOk()
+            ->assertJsonPath('total_count', 2)
+            ->assertJsonPath('valid_count', 1)
+            ->assertJsonPath('issue_count', 1)
+            ->assertJsonPath('issues.0.order_number', '007erp-0920-c40882')
+            ->assertJsonPath('issues.0.reason', '订单 007erp-0920-c40882 缺少电话，不能导出仓库文件。')
+            ->json();
+        $token = $preview['token'];
+
+        // The confirmed download never fabricates missing contact details or loses the issue.
+        $response = $this->actingAs($user)->get('/logistics/oversea/de-tianyun/export?confirm=1&token='.$token)
+            ->assertOk();
+        $this->assertStringContainsString('spreadsheetml.sheet', (string) $response->headers->get('Content-Type'));
+        $rows = $this->xlsxRows($response->getContent());
+        $this->assertCount(2, $rows);
+        $this->assertSame('C40881-007', $rows[1][3]);
+        $this->assertStringNotContainsString('C40882-007', json_encode($rows));
+
+        $tmp = tempnam(sys_get_temp_dir(), 'review-export-');
+        file_put_contents($tmp, $response->getContent());
+        $zip = new ZipArchive;
+        $this->assertTrue($zip->open($tmp) === true);
+        $sheet2 = $zip->getFromName('xl/worksheets/sheet2.xml');
+        $workbook = $zip->getFromName('xl/workbook.xml');
+        $zip->close();
+        @unlink($tmp);
+        $this->assertIsString($sheet2);
+        $this->assertStringContainsString('007erp-0920-c40882', $sheet2);
+        $this->assertStringContainsString('缺少电话', $sheet2);
+        $this->assertStringContainsString('异常订单-请勿提交仓库', $workbook);
+        $this->assertDatabaseHas('shipments', ['order_id' => $good->id, 'shipment_status' => 'pending']);
+        $this->assertDatabaseHas('shipments', ['order_id' => $bad->id, 'shipment_status' => 'pending']);
+        // The confirmation token is one-time use: no old preview can be silently replayed.
+        $this->actingAs($user)->getJson('/logistics/oversea/de-tianyun/export?confirm=1&token='.$token)
+            ->assertStatus(409);
+    }
+
+    public function test_reviewed_export_rejects_changed_orders_instead_of_reusing_stale_warning(): void
+    {
+        $user = $this->userWith(['logistics.view', 'logistics.operate']);
+        $warehouses = $this->warehouses();
+        $order = $this->orderAt($warehouses['DE'], '007erp-0920-c40883', 'DE');
+        $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
+        $preview = $this->actingAs($user)->getJson('/logistics/oversea/de-tianyun/export/preview')->assertOk()->json();
+        $order->address()->update(['phone' => '']);
+        $this->actingAs($user)->getJson('/logistics/oversea/de-tianyun/export?confirm=1&token='.$preview['token'])
+            ->assertStatus(409)
+            ->assertJsonPath('code', 'OVERSEA_EXPORT_BLOCKED');
+        $this->assertDatabaseHas('shipments', [
+            'order_id' => $order->id, 'shipment_status' => 'pending', 'tracking_number' => null,
+        ]);
+    }
+
+    public function test_reviewed_export_all_invalid_orders_downloads_exception_only_not_fake_provider_rows(): void
+    {
+        $user = $this->userWith(['logistics.view', 'logistics.operate']);
+        $warehouses = $this->warehouses();
+        $order = $this->orderAt($warehouses['CA'], '007erp-0920-k26011399', 'CA');
+        $order->address()->update(['phone' => '']);
+        $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
+        $preview = $this->actingAs($user)->getJson('/logistics/oversea/ca/export/preview')
+            ->assertOk()->assertJsonPath('valid_count', 0)->assertJsonPath('issue_count', 1)->json();
+        $response = $this->actingAs($user)->get('/logistics/oversea/ca/export?confirm=1&token='.$preview['token'])
+            ->assertOk();
+        $rows = $this->xlsxRows($response->getContent());
+        $this->assertCount(1, $rows); // Provider-facing header only, no invalid customer.
+        $this->assertSame('客户参考号', $rows[0][0]);
+    }
+
     public function test_pending_moreplus_orders_download_real_xlsx_block_rows(): void
     {
         $user = $this->userWith(['logistics.view', 'logistics.operate']);
