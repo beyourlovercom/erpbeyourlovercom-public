@@ -254,6 +254,99 @@ final class ProductOrderIntegrationTest extends TestCase
         $this->assertDatabaseHas('orders', ['id' => $order->id, 'order_note' => 'Allowed note']);
     }
 
+    public function test_item_amendment_preview_explains_sku_quantity_and_amount_without_writing(): void
+    {
+        $user = $this->userWith(['orders.view', 'orders.create', 'orders.edit']);
+        $original = Product::create(['woocommerce_product_id' => 9031, 'sku' => 'PREVIEW-RED', 'name' => 'Red', 'product_type' => 'simple']);
+        $blue = Product::create(['woocommerce_product_id' => 9032, 'sku' => 'PREVIEW-BLUE', 'name' => 'Blue', 'product_type' => 'simple']);
+        $this->actingAs($user)->post('/customers/orders', $this->orderPayload([
+            'external_order_number' => 'PREVIEW-UNALLOCATED',
+            'items' => [['product_id' => $original->id, 'quantity' => 1, 'unit_price' => '79.00']],
+        ]))->assertRedirect();
+        $order = Order::with('items')->latest('id')->firstOrFail();
+        $originalLine = $order->items->first();
+
+        $this->actingAs($user)->postJson("/customers/orders/{$order->id}/items/preview", [
+            'items' => [
+                ['id' => $originalLine->id, 'product_id' => $blue->id, 'quantity' => 2, 'unit_price' => '79.00'],
+            ],
+        ])->assertOk()
+            ->assertJsonPath('changed', true)
+            ->assertJsonPath('can_save_direct', true)
+            ->assertJsonPath('requires_replan', false)
+            ->assertJsonPath('rows.0.before.sku', 'PREVIEW-RED')
+            ->assertJsonPath('rows.0.after.sku', 'PREVIEW-BLUE')
+            ->assertJsonPath('rows.0.after.quantity', 2)
+            ->assertJsonPath('old_items_gross', '79.00')
+            ->assertJsonPath('new_items_gross', '158.00')
+            ->assertJsonPath('gross_delta', '79.00')
+            ->assertJsonPath('no_writes', true);
+        $this->assertDatabaseHas('order_items', [
+            'id' => $originalLine->id, 'product_id' => $original->id, 'quantity' => 1,
+        ]);
+    }
+
+    public function test_allocated_order_item_preview_marks_required_replan_and_never_edits_data(): void
+    {
+        $user = $this->userWith(['orders.view', 'orders.create', 'orders.edit']);
+        $product = Product::create(['woocommerce_product_id' => 9033, 'sku' => 'ALLOCATED-PREV', 'name' => 'A', 'product_type' => 'simple']);
+        $this->actingAs($user)->post('/customers/orders', $this->orderPayload([
+            'external_order_number' => 'PREVIEW-ALLOCATED',
+            'items' => [['product_id' => $product->id, 'quantity' => 1, 'unit_price' => '19.00']],
+        ]))->assertRedirect();
+        $order = Order::with('items')->latest('id')->firstOrFail();
+        $line = $order->items->first();
+        $order->fulfillmentAllocation()->create(['status' => 'submitted', 'decision_source' => 'manual', 'plan_snapshot' => []]);
+
+        $this->actingAs($user)->postJson("/customers/orders/{$order->id}/items/preview", [
+            'items' => [['id' => $line->id, 'product_id' => $product->id, 'quantity' => 3, 'unit_price' => '19.00']],
+        ])->assertOk()
+            ->assertJsonPath('changed', true)
+            ->assertJsonPath('requires_replan', true)
+            ->assertJsonPath('can_save_direct', false)
+            ->assertJsonCount(1, 'issues');
+        $this->assertDatabaseHas('order_items', ['id' => $line->id, 'quantity' => 1]);
+    }
+
+    public function test_shipped_order_amendment_preview_does_not_authorize_historical_rewrite(): void
+    {
+        $user = $this->userWith(['orders.view', 'orders.create', 'orders.edit']);
+        $product = Product::create(['woocommerce_product_id' => 9034, 'sku' => 'SHIP-PREV', 'name' => 'S', 'product_type' => 'simple']);
+        $this->actingAs($user)->post('/customers/orders', $this->orderPayload([
+            'external_order_number' => 'PREVIEW-SHIPPED',
+            'items' => [['product_id' => $product->id, 'quantity' => 1, 'unit_price' => '19.00']],
+        ]))->assertRedirect();
+        $order = Order::with('items')->latest('id')->firstOrFail();
+        $line = $order->items->first();
+        $order->forceFill(['order_status' => 'shipped'])->save();
+        $this->actingAs($user)->postJson("/customers/orders/{$order->id}/items/preview", [
+            'items' => [['id' => $line->id, 'product_id' => $product->id, 'quantity' => 2, 'unit_price' => '19.00']],
+        ])->assertOk()
+            ->assertJsonPath('can_save_direct', false)
+            ->assertJsonPath('requires_replan', false);
+        $this->assertDatabaseHas('order_items', ['id' => $line->id, 'quantity' => 1]);
+    }
+
+    public function test_amendment_preview_requires_edit_permission_and_cannot_address_foreign_item(): void
+    {
+        $user = $this->userWith(['orders.view', 'orders.create', 'orders.edit']);
+        $restricted = $this->userWith(['orders.view']);
+        $product = Product::create(['woocommerce_product_id' => 9035, 'sku' => 'FOREIGN-PREV', 'name' => 'F', 'product_type' => 'simple']);
+        foreach (['PRV1', 'PRV2'] as $key) {
+            $this->actingAs($user)->post('/customers/orders', $this->orderPayload([
+                'external_order_number' => $key,
+                'items' => [['product_id' => $product->id, 'quantity' => 1, 'unit_price' => '5.00']],
+            ]))->assertRedirect();
+        }
+        $orders = Order::with('items')->latest('id')->limit(2)->get();
+        $order = $orders[0];
+        $foreignLine = $orders[1]->items->first();
+        $body = ['items' => [['id' => $foreignLine->id, 'product_id' => $product->id, 'quantity' => 2, 'unit_price' => '5.00']]];
+        $this->actingAs($restricted)->postJson("/customers/orders/{$order->id}/items/preview", $body)->assertForbidden();
+        $this->actingAs($user)->postJson("/customers/orders/{$order->id}/items/preview", $body)->assertStatus(422)
+            ->assertJsonValidationErrors('items.0.id');
+    }
+
     public function test_historical_rows_remain_readable_when_items_not_replaced(): void
     {
         $order = Order::create([
