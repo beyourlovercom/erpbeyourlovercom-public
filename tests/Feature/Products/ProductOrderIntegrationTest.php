@@ -348,6 +348,56 @@ final class ProductOrderIntegrationTest extends TestCase
         $this->assertStringContainsString('items.0.id', $response->getContent());
     }
 
+    public function test_manual_item_amendment_cannot_change_financially_posted_order(): void
+    {
+        $user = $this->userWith(['orders.view', 'orders.create', 'orders.edit']);
+        $original = Product::create(['woocommerce_product_id' => 9411, 'sku' => 'POSTED-A', 'name' => 'A', 'product_type' => 'simple']);
+        $replacement = Product::create(['woocommerce_product_id' => 9412, 'sku' => 'POSTED-B', 'name' => 'B', 'product_type' => 'simple']);
+        $this->actingAs($user)->post('/customers/orders', $this->orderPayload([
+            'external_order_number' => 'FINANCE-GUARD-001',
+            'items' => [['product_id' => $original->id, 'quantity' => 1, 'unit_price' => '79.00']],
+        ]))->assertRedirect();
+        $order = Order::with('items')->latest('id')->firstOrFail();
+        $line = $order->items->first();
+        $order->financials()->create([
+            'currency' => 'USD', 'merchandise_list_amount' => '79.00',
+            'amount_paid' => '79.00', 'revenue_provenance' => 'confirmed_manual',
+        ]);
+        $this->actingAs($user)->patch("/customers/orders/{$order->id}", [
+            'items' => [['id' => $line->id, 'product_id' => $replacement->id,
+                'quantity' => 1, 'unit_price' => '79.00']],
+        ])->assertSessionHasErrors('items');
+        $this->assertDatabaseHas('order_items', [
+            'id' => $line->id, 'product_id' => $original->id, 'sku' => 'POSTED-A',
+        ]);
+        $this->assertDatabaseHas('order_financials', [
+            'order_id' => $order->id, 'amount_paid' => '79.00',
+        ]);
+    }
+
+    public function test_manual_order_with_woocommerce_reference_cannot_bypass_external_guard(): void
+    {
+        $user = $this->userWith(['orders.view', 'orders.create', 'orders.edit']);
+        $original = Product::create(['woocommerce_product_id' => 9413, 'sku' => 'WLINK-A', 'name' => 'A', 'product_type' => 'simple']);
+        $replacement = Product::create(['woocommerce_product_id' => 9414, 'sku' => 'WLINK-B', 'name' => 'B', 'product_type' => 'simple']);
+        $this->actingAs($user)->post('/customers/orders', $this->orderPayload([
+            'external_order_number' => 'WLINK-GUARD-001',
+            'items' => [['product_id' => $original->id, 'quantity' => 1, 'unit_price' => '79.00']],
+        ]))->assertRedirect();
+        $order = Order::with('items')->latest('id')->firstOrFail();
+        $line = $order->items->first();
+        $order->externalReferences()->create([
+            'provider' => 'woocommerce', 'connection_key' => 'primary', 'reference' => 'woo-9413',
+        ]);
+        $this->actingAs($user)->patch("/customers/orders/{$order->id}", [
+            'items' => [['id' => $line->id, 'product_id' => $replacement->id,
+                'quantity' => 2, 'unit_price' => '79.00']],
+        ])->assertSessionHasErrors('items');
+        $this->assertDatabaseHas('order_items', [
+            'id' => $line->id, 'product_id' => $original->id, 'quantity' => 1,
+        ]);
+    }
+
     public function test_historical_rows_remain_readable_when_items_not_replaced(): void
     {
         $order = Order::create([
