@@ -127,6 +127,96 @@ final class OrderItemAtomicReplanTest extends TestCase
         $this->assertSame($revision, app(OrderAmendmentRevision::class)->forOrder($order));
     }
 
+    public function test_adding_zero_price_gift_creates_a_real_reserved_inventory_line(): void
+    {
+        [$actor, $order, $wh, $red, $blue, $old] = $this->scenario();
+        $gift = Product::query()->create([
+            'sku' => 'ATOMIC-GIFT', 'name' => 'Gift',
+            'source_type' => 'manual', 'product_type' => 'simple', 'is_active' => true,
+        ]);
+        WarehouseInventory::query()->create([
+            'warehouse_id' => $wh->id, 'product_id' => $gift->id,
+            'quantity_on_hand' => 6, 'quantity_reserved' => 0,
+        ]);
+        $beforeId = $order->items()->firstOrFail()->id;
+        $result = app(OrderItemAtomicReplanService::class)->commit(
+            $order, [
+                ['id' => $beforeId, 'product_id' => $red->id, 'quantity' => 2, 'unit_price' => '19.99'],
+                ['id' => null, 'product_id' => $gift->id, 'quantity' => 1, 'unit_price' => '0.00'],
+            ],
+            [
+                ['item_index' => 0, 'source_code' => 'US-LA'],
+                ['item_index' => 1, 'source_code' => 'US-LA'],
+            ],
+            app(OrderAmendmentRevision::class)->forOrder($order),
+            'Customer requested a complimentary gift', $actor,
+        );
+        $this->assertCount(2, $result['order_item_ids']);
+        $this->assertContains($beforeId, $result['order_item_ids']);
+        $this->assertDatabaseHas('order_items', [
+            'order_id' => $order->id, 'sku' => 'ATOMIC-GIFT',
+            'quantity' => 1, 'unit_price' => '0.00', 'line_revenue' => '0.00',
+        ]);
+        $this->assertSame(2, (int) WarehouseInventory::query()->where('product_id', $red->id)->value('quantity_reserved'));
+        $this->assertSame(1, (int) WarehouseInventory::query()->where('product_id', $gift->id)->value('quantity_reserved'));
+        $this->assertDatabaseHas('inventory_reservations', ['id' => $old->id, 'status' => 'released']);
+    }
+
+    public function test_migrating_held_stock_between_warehouses_reserves_only_new_warehouse(): void
+    {
+        [$actor, $order, $oldWh, $red, $blue, $old] = $this->scenario();
+        $newWh = Warehouse::query()->where('code', 'US-NY')->firstOrFail();
+        InventorySyncBatch::query()->create([
+            'warehouse_id' => $newWh->id, 'source_type' => 'xlsx', 'sync_mode' => 'full',
+            'status' => 'confirmed', 'confirmed_at' => now(), 'stock_count_at' => now(),
+        ]);
+        WarehouseInventory::query()->create([
+            'warehouse_id' => $newWh->id, 'product_id' => $blue->id,
+            'quantity_on_hand' => 10, 'quantity_reserved' => 0,
+        ]);
+        $lineId = $order->items()->firstOrFail()->id;
+        $result = app(OrderItemAtomicReplanService::class)->commit(
+            $order, [['id' => $lineId, 'product_id' => $blue->id, 'quantity' => 3, 'unit_price' => '19.99']],
+            [['item_index' => 0, 'source_code' => 'US-NY']],
+            app(OrderAmendmentRevision::class)->forOrder($order),
+            'Customer prefers stock from New York warehouse', $actor,
+        );
+        $this->assertSame($newWh->id, $result['warehouse_id']);
+        $this->assertSame($newWh->id, $order->fresh('shipment')->shipment?->warehouse_id);
+        $this->assertSame(0, (int) WarehouseInventory::query()
+            ->where('warehouse_id', $oldWh->id)->where('product_id', $red->id)->value('quantity_reserved'));
+        $this->assertSame(3, (int) WarehouseInventory::query()
+            ->where('warehouse_id', $newWh->id)->where('product_id', $blue->id)->value('quantity_reserved'));
+        $this->assertDatabaseHas('inventory_reservations', [
+            'id' => $result['new_reservation_id'], 'warehouse_id' => $newWh->id, 'status' => 'reserved',
+        ]);
+        $this->assertDatabaseHas('inventory_reservations', ['id' => $old->id, 'status' => 'released']);
+    }
+
+    public function test_invalid_new_carrier_rolls_back_old_warehouse_reservation_and_items(): void
+    {
+        [$actor, $order, $wh, $red, $blue, $old] = $this->scenario();
+        $lineId = $order->items()->firstOrFail()->id;
+        try {
+            app(OrderItemAtomicReplanService::class)->commit(
+                $order,
+                [['id' => $lineId, 'product_id' => $blue->id, 'quantity' => 3, 'unit_price' => '19.99']],
+                [['item_index' => 0, 'source_code' => 'US-LA', 'carrier' => 'CARRIER-NOT-ENABLED']],
+                app(OrderAmendmentRevision::class)->forOrder($order),
+                'Customer requested the blue version instead', $actor,
+            );
+            $this->fail('Invalid carrier must reject full transaction');
+        } catch (HttpExceptionInterface $e) {
+            $this->assertSame(422, $e->getStatusCode());
+        }
+        $this->assertDatabaseHas('order_items', [
+            'id' => $lineId, 'sku' => 'ATOMIC-RED', 'quantity' => 2,
+        ]);
+        $this->assertDatabaseHas('inventory_reservations', ['id' => $old->id, 'status' => 'reserved']);
+        $this->assertSame(2, (int) WarehouseInventory::query()->where('product_id', $red->id)->value('quantity_reserved'));
+        $this->assertSame(0, (int) WarehouseInventory::query()->where('product_id', $blue->id)->value('quantity_reserved'));
+    }
+
     public function test_success_replaces_single_hold_and_order_item_in_one_transaction(): void
     {
         [$actor, $order, $wh, $red, $blue, $old] = $this->scenario();
