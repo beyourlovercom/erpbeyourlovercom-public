@@ -329,6 +329,34 @@ final class OverseaWarehouseWorkbenchTest extends TestCase
             ->assertStatus(409);
     }
 
+    public function test_preflight_identifies_multiple_missing_fields_and_works_for_all_five_warehouses(): void
+    {
+        $user = $this->userWith(['logistics.view', 'logistics.operate']);
+        $warehouses = $this->warehouses();
+        foreach ([
+            ['US-NY', 'us-ny', '007erp-0920-c50111'],
+            ['US-LA', 'us-moreplus', '007erp-0920-c50112'],
+            ['US-SM', 'us-3sm', '007erp-0920-c50113'],
+            ['DE', 'de-tianyun', '007erp-0920-c50114'],
+            ['CA', 'ca', '007erp-0920-k50115'],
+        ] as [$code, $key, $erpId]) {
+            $order = $this->orderAt($warehouses[$code], $erpId, $code === 'DE' ? 'DE' : 'US');
+            $order->address()->update(['phone' => '', 'postal_code' => '', 'city' => '']);
+            $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
+
+            $preview = $this->actingAs($user)->getJson("/logistics/oversea/{$key}/export/preview")
+                ->assertOk()->assertJsonPath('valid_count', 0)->assertJsonPath('issue_count', 1)->json();
+            $reason = $preview['issues'][0]['reason'];
+            $this->assertStringContainsString('电话', $reason);
+            $this->assertStringContainsString('邮编', $reason);
+            $this->assertStringContainsString('城市', $reason);
+            $this->assertSame($erpId, $preview['issues'][0]['order_number']);
+            $this->assertDatabaseHas('shipments', [
+                'order_id' => $order->id, 'shipment_status' => 'pending', 'tracking_number' => null,
+            ]);
+        }
+    }
+
     public function test_reviewed_export_rejects_changed_orders_instead_of_reusing_stale_warning(): void
     {
         $user = $this->userWith(['logistics.view', 'logistics.operate']);
