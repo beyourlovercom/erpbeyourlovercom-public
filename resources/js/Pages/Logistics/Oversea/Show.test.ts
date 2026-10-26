@@ -53,6 +53,23 @@ describe('Oversea Dede file exchange workbench', () => {
     expect(wrapper.text()).toContain('不会阻止发货')
   })
 
+  it('shows Germany tracking upload validation reason inline instead of an opaque failure', async () => {
+    const deWarehouse = { key: 'de-tianyun', id: 3, code: 'DE', label: '德国天运仓', carrier: 'DHL', url: '/logistics/oversea/de-tianyun' }
+    const wrapper = mountPage({ warehouseKey: 'de-tianyun', warehouse: deWarehouse, trackingImportPreview: null })
+    const input = wrapper.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', {
+      configurable: true,
+      value: [new File(['bad-wms'], 'de-return.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })],
+    })
+    await input.trigger('change')
+    const call = routerPost.mock.calls.at(-1)
+    expect(call?.[0]).toBe('/logistics/oversea/de-tianyun/tracking-import/preview')
+    expect(call?.[2]).toMatchObject({ forceFormData: true, preserveScroll: true })
+    call?.[2].onError({ file: 'WMS 回传文件缺少 Reference order No. 或 Tracking No.。' })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('[role="alert"]').text()).toContain('缺少 Reference order No.')
+  })
+
   it('keeps 3SM file return disabled and exposes manual confirm after tracking entry', async () => {
     const wrapper = mountPage({ warehouseKey: 'us-3sm', warehouse: warehouseOptions[1], trackingImportPreview: null, rows: usSmPendingRows })
     expect(wrapper.text()).not.toContain('上传物流回传表')
