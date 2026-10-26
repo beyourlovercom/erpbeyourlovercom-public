@@ -15,10 +15,12 @@ use DomainException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 use InvalidArgumentException;
 use Symfony\Component\HttpFoundation\Response as HttpResponse;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 
 final class OverseaWarehouseController
 {
@@ -112,7 +114,18 @@ final class OverseaWarehouseController
         $warehouse = in_array($warehouse, ['us-sm', 'us-sj', 'usa-sj'], true) ? 'us-3sm' : $warehouse;
         abort_unless(array_key_exists($warehouse, OverseaWarehouseReviewService::WAREHOUSE_CODE_BY_KEY), 404);
         $request->validate(['file' => ['required', 'file', 'extensions:xlsx,csv,txt', 'max:10240']]);
-        $preview = $this->trackingReturns->preview($warehouse, $request->file('file'));
+        try {
+            $preview = $this->trackingReturns->preview($warehouse, $request->file('file'));
+        } catch (HttpExceptionInterface $e) {
+            // DE provider/format failures are actionable file errors, not a generic Inertia 422 page.
+            // Keep the service's fail-closed validations and do not enter Apply.
+            if ($warehouse !== 'de-tianyun' || $e->getStatusCode() !== 422) {
+                throw $e;
+            }
+            throw ValidationException::withMessages([
+                'file' => $e->getMessage() ?: '德国天运回传文件校验失败，请检查 XLSX 和表头。',
+            ]);
+        }
         $request->session()->put($this->trackingSessionKey($warehouse), $preview);
 
         return redirect("/logistics/oversea/{$warehouse}?view=pending")

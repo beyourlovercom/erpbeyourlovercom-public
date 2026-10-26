@@ -510,6 +510,68 @@ final class OverseaWarehouseWorkbenchTest extends TestCase
         $this->assertStringContainsString('主 Tracking No. 与 Package Tracking No. 不一致', $stored['rows'][0]['message']);
     }
 
+    public function test_de_tianyun_return_can_preview_apply_and_skip_exact_replay(): void
+    {
+        $user = $this->userWith(['logistics.view', 'logistics.operate']);
+        $warehouses = $this->warehouses();
+        $order = $this->orderAt($warehouses['DE'], '007erp-0920-c40803', 'NL');
+        $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
+
+        $headers = [
+            'Outbound Order No./出库单号', 'Reference order No./参考单号',
+            'Warehouse/仓库', 'Tracking No./物流跟踪号', 'Status/状态',
+            'Shipping service/物流渠道', 'Carrier/承运商', 'OutboundTime/出库时间',
+        ];
+        $rows = [[
+            'OBS-DE-40803', 'C40803-007', '德国仓(Hannover)', '00340435069161712046',
+            '已出库', 'DHL PAKET International N', 'DHL', '',
+        ]];
+        $file = $this->providerXlsx('de-tianyun-return.xlsx', '出库单', $headers, $rows);
+        $this->actingAs($user)->post('/logistics/oversea/de-tianyun/tracking-import/preview', ['file' => $file])
+            ->assertRedirect('/logistics/oversea/de-tianyun?view=pending');
+        $stored = session('logistics.oversea_tracking_return.de-tianyun');
+        $this->assertSame(1, $stored['apply_count']);
+        $this->assertSame(0, $stored['blocked_count']);
+        $this->assertSame('DHL', $stored['rows'][0]['carrier']);
+        $this->assertSame('OBS-DE-40803', $stored['rows'][0]['provider_order_reference']);
+        $this->assertDatabaseHas('shipments', ['order_id' => $order->id, 'shipment_status' => 'pending']);
+
+        $this->actingAs($user)->post('/logistics/oversea/de-tianyun/tracking-import/apply', ['token' => $stored['token']])
+            ->assertRedirect('/logistics/oversea/de-tianyun?view=shipped');
+        $this->assertDatabaseHas('shipments', [
+            'order_id' => $order->id, 'shipment_status' => 'shipped',
+            'tracking_number' => '00340435069161712046', 'carrier' => 'DHL',
+        ]);
+
+        $replay = $this->providerXlsx('de-tianyun-replay.xlsx', '出库单', $headers, $rows);
+        $this->actingAs($user)->post('/logistics/oversea/de-tianyun/tracking-import/preview', ['file' => $replay])
+            ->assertRedirect('/logistics/oversea/de-tianyun?view=pending');
+        $stored = session('logistics.oversea_tracking_return.de-tianyun');
+        $this->assertSame(0, $stored['apply_count']);
+        $this->assertSame(1, $stored['noop_count']);
+        $this->assertSame(0, $stored['blocked_count']);
+    }
+
+    public function test_de_tianyun_invalid_header_returns_actionable_file_error_without_writes(): void
+    {
+        $user = $this->userWith(['logistics.view', 'logistics.operate']);
+        $warehouses = $this->warehouses();
+        $order = $this->orderAt($warehouses['DE'], '007erp-0920-c40804', 'DE');
+        $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
+
+        $file = $this->providerXlsx('de-missing-reference.xlsx', '出库单',
+            ['Invalid reference', 'Tracking No./物流跟踪号'],
+            [['C40804-007', '00340435069161712047']]);
+        $this->actingAs($user)
+            ->from('/logistics/oversea/de-tianyun?view=pending')
+            ->post('/logistics/oversea/de-tianyun/tracking-import/preview', ['file' => $file])
+            ->assertRedirect('/logistics/oversea/de-tianyun?view=pending')
+            ->assertSessionHasErrors(['file' => 'WMS 回传文件缺少 Reference order No. 或 Tracking No.。']);
+        $this->assertDatabaseHas('shipments', [
+            'order_id' => $order->id, 'shipment_status' => 'pending', 'tracking_number' => null,
+        ]);
+    }
+
     public function test_wms_return_blocks_explicit_cancellation_even_with_valid_tracking(): void
     {
         $user = $this->userWith(['logistics.view', 'logistics.operate']);

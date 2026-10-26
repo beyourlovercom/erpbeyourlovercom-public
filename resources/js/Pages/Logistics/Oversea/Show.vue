@@ -42,6 +42,7 @@ const grid = reactive(useAccountGridPreferences<ColumnKey>({
 const canEditRow = computed(() => props.canOperate || (props.canReview && props.view === 'review'))
 const drafts = reactive<Record<number,{ note:string; carrier:string; service:string; tracking_number:string }>>({})
 const trackingFileInput = ref<HTMLInputElement|null>(null)
+const trackingUploadError = ref('')
 const trackingPreviewRows = computed(() => props.trackingImportPreview?.rows.slice(0, 20) ?? [])
 const canUploadTrackingFile = computed(() => props.warehouseKey !== 'us-3sm')
 const trackingFileHint = computed(() => props.warehouseKey === 'us-3sm'
@@ -81,14 +82,19 @@ const manualShipUsSm = (row:Row) => {
   rowErrors[row.order_id] = ''
   router.post(`/logistics/oversea/us-3sm/orders/${row.order_id}/manual-ship`, { tracking_number:tracking }, { preserveScroll:true })
 }
-const chooseTrackingFile = () => trackingFileInput.value?.click()
+const chooseTrackingFile = () => { trackingUploadError.value = ''; trackingFileInput.value?.click() }
 const previewTrackingFile = (event:Event) => {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
+  trackingUploadError.value = ''
   const data = new FormData()
   data.append('file', file)
-  router.post(`${basePath.value}/tracking-import/preview`, data, { forceFormData:true, preserveScroll:true, onFinish:() => { input.value = '' } })
+  router.post(`${basePath.value}/tracking-import/preview`, data, {
+    forceFormData:true, preserveScroll:true,
+    onError:(errors) => { trackingUploadError.value = String(errors.file || '上传失败，请检查文件或联系管理员查看错误日志。') },
+    onFinish:() => { input.value = '' },
+  })
 }
 const applyTrackingPreview = () => {
   if (!props.trackingImportPreview) return
@@ -159,6 +165,7 @@ const compactPages = computed<(number|string)[]>(() => {
           <button v-if="canOperate && canUploadTrackingFile" type="button" class="file-button primary" @click="chooseTrackingFile">⇧ 上传物流回传表</button>
         </div>
       </header>
+      <p v-if="warehouse && view === 'pending' && trackingUploadError" class="tracking-upload-error" role="alert">{{ trackingUploadError }}</p>
       <div v-if="warehouse && view === 'pending'" class="oversea-file-flow">
         <span>① 审核通过</span><b>→</b><span>② 下载仓库下单表</span><b>→</b><span>③ 上传仓库 / WMS</span><b>→</b><span>④ 仓库回传 Tracking</span><b>→</b><span>⑤ 上传 ERP 并确认发货</span>
         <small>{{ trackingFileHint }}</small>
@@ -259,6 +266,8 @@ const compactPages = computed<(number|string)[]>(() => {
 </template>
 
 <style scoped>
+.tracking-upload-error{margin:0 0 10px;padding:10px 12px;border:1px solid #fecaca;border-radius:8px;background:#fff7f7;color:#991b1b;font-size:13px;font-weight:600}
+
 .oversea-page{padding:18px 22px 28px 8px;min-width:0}.oversea-workbench{display:grid;grid-template-columns:124px minmax(0,1fr);gap:10px;align-items:start}.oversea-main{min-width:0}.warehouse-rail{position:sticky;top:12px;border:1px solid #dfe6ea;border-radius:8px;background:#fff;padding:6px 5px}.warehouse-rail-title{margin:2px 6px 5px;color:#64748b;font-size:11px;font-weight:800;letter-spacing:.06em}.warehouse-link{width:100%;border:0;background:transparent;border-radius:6px;padding:7px 6px;text-align:left;color:#475569;font-size:12px;font-weight:700;white-space:nowrap}.warehouse-link:hover{background:#f1f5f9}.warehouse-link.active{background:#e7f6f3;color:#0f766e}.oversea-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:12px}.oversea-heading h1{margin:0;color:#132238;font-size:28px;line-height:1.2}.oversea-heading p{margin:6px 0 0;color:#64748b;font-size:14px}
 .oversea-file-actions{display:flex;gap:10px}.hidden-file{display:none}.file-button{height:40px;padding:0 16px;border:1px solid #0f8f82;border-radius:8px;background:white;color:#0d796f;font-weight:700}.file-button.primary{background:#0f8f82;color:white}.file-link{display:inline-flex;align-items:center;text-decoration:none}.file-button:disabled{opacity:.45;cursor:not-allowed}.oversea-file-flow{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:-2px 0 12px;padding:9px 11px;border:1px solid #dbe7e5;border-radius:8px;background:#f5fbfa;color:#395d59;font-size:12px}.oversea-file-flow b{color:#94a3b8}.oversea-file-flow small{flex-basis:100%;color:#64748b}
 .tracking-preview{margin:0 0 14px;padding:12px;border:1px solid #cbd5e1;border-radius:10px;background:#f8fafc}.tracking-preview-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.tracking-preview-head>div{display:flex;flex-direction:column;gap:3px}.tracking-preview-head strong{color:#0f172a}.tracking-preview-head span,.tracking-hint,.tracking-preview small{color:#64748b;font-size:12px}.tracking-hint{margin:8px 0}.tracking-preview-table-wrap{overflow:auto;border:1px solid #e2e8f0;border-radius:8px;background:#fff}.tracking-preview-table{width:100%;min-width:980px;border-collapse:collapse;font-size:12px}.tracking-preview-table th,.tracking-preview-table td{padding:7px 8px;border-bottom:1px solid #edf2f7;text-align:left;white-space:nowrap}.tracking-preview-table th{background:#f8fafc;color:#475569}.tracking-status{font-weight:800}.tracking-status.apply{color:#047857}.tracking-status.noop{color:#64748b}.tracking-status.blocked{color:#b91c1c}

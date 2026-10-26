@@ -88,3 +88,9 @@ jobs:
           else
             ./node_modules/.bin/vitest run resources/js/Pages/Products/Index.test.ts resources/js/Pages/Identity/Users/Index.test.ts --maxWorkers=2
           fi
+
+      - name: Germany WMS tracking return upload regressions
+        shell: bash
+        run: |
+          php artisan test tests/Feature/Logistics/OverseaWarehouseWorkbenchTest.php --no-ansi
+          ./node_modules/.bin/vitest run resources/js/Pages/Logistics/Oversea/Show.test.ts --maxWorkers=2
