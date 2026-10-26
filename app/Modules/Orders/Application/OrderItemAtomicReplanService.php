@@ -97,8 +97,11 @@ final class OrderItemAtomicReplanService
                     409, '商品、分仓或预留库存已变化，请重新预检后再提交。');
                 abort_unless($locked->order_status?->value === 'pending_shipment'
                     && $locked->fulfillment_parent_id === null
-                    && $locked->source_type !== OrderSourceType::WooCommerce,
-                    409, '仅允许修改尚未实际发货且不需要 Woo 双向同步的原始订单。');
+                    && in_array($locked->source_type, [OrderSourceType::Manual, OrderSourceType::ManualOther], true)
+                    && ! $locked->externalReferences()->where('provider', 'woocommerce')->exists(),
+                    409, '当前原始订单可能关联外部商店，需先完成 Woo/ERP 商品一致性审核。');
+                abort_if($locked->financials()->exists() || $locked->costEntries()->exists(),
+                    409, '订单已有财务成本或结算记录，需先完成财务调整契约，不能直接改写商品。');
                 abort_if($locked->fulfillmentChildren()->exists(),
                     409, '订单已有拆分履约；必须使用多仓专用事务，不能按单仓直接改写。');
                 abort_if($locked->procurementOrder()->exists(), 409, '已关联采购单，不能直接修改商品。');
