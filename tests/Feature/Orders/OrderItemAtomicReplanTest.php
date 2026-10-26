@@ -273,6 +273,21 @@ final class OrderItemAtomicReplanTest extends TestCase
         ]);
     }
 
+    public function test_woocommerce_linked_order_is_blocked_until_external_sync_contract_exists(): void
+    {
+        [$actor, $order, $wh, $red, $blue, $old] = $this->scenario();
+        $order->forceFill(['source_type' => 'woocommerce'])->save();
+        $revision = app(OrderAmendmentRevision::class)->forOrder($order);
+        try {
+            $this->submit($actor, $order, $blue, $revision);
+            $this->fail('Externally sourced order amendments require Woo reconciliation');
+        } catch (HttpExceptionInterface $e) {
+            $this->assertSame(409, $e->getStatusCode());
+        }
+        $this->assertDatabaseHas('order_items', ['order_id' => $order->id, 'sku' => 'ATOMIC-RED']);
+        $this->assertDatabaseHas('inventory_reservations', ['id' => $old->id, 'status' => 'reserved']);
+    }
+
     public function test_committed_inventory_cannot_be_released_for_replan(): void
     {
         [$actor, $order, $wh, $red, $blue, $old] = $this->scenario();
