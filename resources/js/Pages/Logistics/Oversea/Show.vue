@@ -139,9 +139,9 @@ const downloadXlsx = async (accepted:ExportPreflight|null) => {
   exportReview.value = null
   publishGlobalFeedback({
     state:'SUCCESS',
-    title:accepted && accepted.issue_count ? '下单表及异常清单已下载' : '仓库下单表已开始下载',
+    title:accepted && accepted.issue_count ? '合规仓库下单表已开始下载' : '仓库下单表已开始下载',
     message:accepted && accepted.issue_count
-      ? `可下单 ${accepted.valid_count} 笔，待修复 ${accepted.issue_count} 笔；异常订单未提交至仓库下单表。`
+      ? `可下单 ${accepted.valid_count} 笔；${accepted.issue_count} 笔异常需单独下载问题清单，未混入仓库模板。`
       : filename,
   })
 }
@@ -190,6 +190,35 @@ const runExport = async (accepted:ExportPreflight|null = null) => {
 }
 const downloadOutboundFile = () => runExport()
 const confirmReviewedExport = () => { if (exportReview.value) void runExport(exportReview.value) }
+// The provider XLSX must remain exactly one sheet. The optional issue CSV
+// provides all skipped orders and is never submitted to the WMS.
+const downloadExportIssues = () => {
+  if (!exportReview.value?.issues.length) return
+  const csvCell = (value:string|number|null):string => {
+    const raw = String(value ?? '')
+    const safe = /^\s*[=+\-@]/.test(raw) ? `'${raw}` : raw
+    return `"${safe.replace(/"/g, '""')}"`
+  }
+  const lines = [
+    ['ERP订单号','订单ID','异常原因','处理要求'].map(csvCell).join(','),
+    ...exportReview.value.issues.map(issue => [
+      issue.order_number, issue.order_id, issue.reason, '返回 ERP 修复后再导出',
+    ].map(csvCell).join(',')),
+  ]
+  const blob = new Blob(['\uFEFF', lines.join('\r\n')], { type:'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `007-${props.warehouseKey}-export-issues.csv`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 30000)
+  publishGlobalFeedback({
+    state:'SUCCESS', title:'问题订单清单已下载',
+    message:`共 ${exportReview.value.issues.length} 笔，需先修复后再提交仓库。`,
+  })
+}
 const cancelReviewedExport = () => { exportReview.value = null; publishGlobalFeedback({
   state:'INFO', title:'已返回订单修改', message:'未导出文件；可修正问题订单后重新检查。',
 }) }
@@ -286,10 +315,11 @@ const compactPages = computed<(number|string)[]>(() => {
             <td><a v-if="issue.order_id" :href="`/orders/${issue.order_id}`">查看订单</a><span v-else>—</span></td>
           </tr></tbody></table>
         </div>
-        <p class="export-review-notice">选择“继续下载”：Excel 第一工作表仅含 {{ exportReview.valid_count }} 笔合规下单数据；第二工作表“异常订单-请勿提交仓库”保留全部 {{ exportReview.issue_count }} 笔异常及原因。请勿将异常表当作下单数据上传仓库。</p>
+        <p class="export-review-notice">继续下载时仅导出 {{ exportReview.valid_count }} 笔符合仓库模板的订单，原始 XLSX 格式不变；{{ exportReview.issue_count }} 笔异常不会包含在仓库文件中。可单独下载问题清单 CSV，修改后再次导出。</p>
         <div class="export-review-actions">
+          <button type="button" class="file-button" @click="downloadExportIssues">下载问题清单 CSV</button>
           <button type="button" class="file-button" @click="cancelReviewedExport">返回修改</button>
-          <button type="button" class="file-button primary" :disabled="exportingOrders" @click="confirmReviewedExport">仍然下载（{{ exportReview.valid_count }} 笔下单 + {{ exportReview.issue_count }} 笔异常）</button>
+          <button type="button" class="file-button primary" :disabled="exportingOrders" @click="confirmReviewedExport">继续下载 {{ exportReview.valid_count }} 笔合规订单</button>
         </div>
       </section>
       <div v-if="warehouse && view === 'pending'" class="oversea-file-flow">
