@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Head, router, useForm } from '@inertiajs/vue3'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
+import axios from 'axios'
 import { publishGlobalFeedback } from '../../lib/globalFeedback'
 
 const commonCurrencyOptions = [
@@ -207,6 +208,57 @@ const currencyOptions = computed(() => {
     : [{ value: current, label: current }, ...commonCurrencyOptions]
 })
 
+type AmendmentPreview = {
+  changed:boolean; can_save_direct:boolean; requires_replan:boolean; no_writes:boolean;
+  old_items_gross:string; new_items_gross:string; gross_delta:string; currency:string;
+  rows:{order_item_id:number|null; operation:string; before:{sku:string|null;quantity:number}|null; after:{sku:string;quantity:number}|null}[];
+  issues:string[];
+  stock_by_warehouse:{warehouse_id:number; warehouse_name:string; single_warehouse_candidate:boolean;
+    details:{product_id:number;required:number;available:number|null;enough:boolean}[]}[];
+  inventory_note:string;
+}
+const amendmentPreview = ref<AmendmentPreview|null>(null)
+const amendmentPreviewLoading = ref(false)
+const amendmentPreviewError = ref('')
+const previewItemAmendment = async () => {
+  if (amendmentPreviewLoading.value) return
+  amendmentPreviewLoading.value = true
+  amendmentPreview.value = null
+  amendmentPreviewError.value = ''
+  try {
+    const response = await axios.post<AmendmentPreview>(
+      `${basePath.value}/${props.order.id}/items/preview`,
+      { items:form.items.map(item => ({
+        id:item.id, product_id:item.product_id, product_summary:item.product_summary,
+        quantity:item.quantity, unit_price:item.unit_price,
+      })) },
+    )
+    amendmentPreview.value = response.data
+    if (!response.data.can_save_direct && response.data.changed) {
+      publishGlobalFeedback({
+        state:'BLOCKED',title:'商品变更需要重新规划',
+        message:response.data.issues[0] ?? '订单当前不允许直接修改商品。',
+        next:'先处理库存、仓库或履约冲突；本次预检没有修改任何订单。',
+      })
+    } else {
+      publishGlobalFeedback({
+        state:'SUCCESS',title:'商品变更预检完成',
+        message:response.data.changed ? '可按权限保存，然后重新确认发货仓库。' : '商品明细没有变化。',
+      })
+    }
+  } catch (error) {
+    const payload = axios.isAxiosError(error)
+      ? error.response?.data as {message?:string;errors?:Record<string,string[]>}|undefined : undefined
+    const problem = Object.values(payload?.errors ?? {}).flat()[0]
+    amendmentPreviewError.value = problem || payload?.message || '预检失败，请检查产品 SKU、数量及权限后重试。'
+    publishGlobalFeedback({
+      state:'ERROR',title:'商品修改预检失败',message:amendmentPreviewError.value,
+      next:'请在当前订单页修正错误，不需要重新打开页面。',
+    })
+  } finally {
+    amendmentPreviewLoading.value = false
+  }
+}
 const editMode = ref(false)
 
 const enterEditMode = () => { editMode.value = true }
@@ -228,15 +280,31 @@ const hasItemChanges = () => JSON.stringify(form.items.map(item => ({
   quantity: Number(item.quantity), unit_price: Number(item.unit_price).toFixed(2),
 }))) !== JSON.stringify(initialItemSnapshot())
 
+watch(() => JSON.stringify(form.items.map(item => [
+  item.id,item.product_id,item.sku,item.product_summary,item.quantity,item.unit_price,
+])), () => { amendmentPreview.value = null; amendmentPreviewError.value = '' })
+
 const cancelEdit = () => {
   form.reset()
   Object.assign(form, makeFormData())
   form.clearErrors()
+  amendmentPreview.value = null
+  amendmentPreviewError.value = ''
   editMode.value = false
 }
 
 const submit = () => {
   const itemsChanged = hasItemChanges()
+  if (itemsChanged && !amendmentPreview.value) {
+    publishGlobalFeedback({state:'BLOCKED',title:'请先检查商品变更',
+      message:'保存前请执行 SKU、库存和发货仓库影响预检。'})
+    return
+  }
+  if (itemsChanged && !amendmentPreview.value?.can_save_direct) {
+    publishGlobalFeedback({state:'BLOCKED',title:'订单尚不能直接变更',
+      message:amendmentPreview.value?.issues[0] ?? '当前商品关联的分仓或库存状态尚未完成审核。'})
+    return
+  }
   form.transform(data => {
     if (itemsChanged) return data
     const { items: _unchangedItems, ...otherFields } = data
@@ -907,6 +975,27 @@ const submitReplacement = () => {
             </div>
             <button type="button" class="erp-btn erp-btn-secondary ord-add-product" @click="addOrderItem">+ 增加商品 / 赠品</button>
             <p class="ord-item-gift-hint">赠品选择真实 SKU，数量需大于 0，单价可填 0.00。修改前请先确认客户同意。</p>
+            <div class="ord-amendment-actions">
+              <button type="button" class="erp-btn erp-btn-secondary" :disabled="amendmentPreviewLoading" @click="previewItemAmendment">
+                {{ amendmentPreviewLoading ? '正在核对…' : '检查 SKU、库存与分仓影响' }}
+              </button>
+              <small>只读预检，不会修改订单、库存或发货状态。</small>
+            </div>
+            <p v-if="amendmentPreviewError" class="erp-field-error" role="alert">{{ amendmentPreviewError }}</p>
+            <section v-if="amendmentPreview" class="ord-amendment-preview" aria-label="订单商品变更预检结果">
+              <strong>{{ amendmentPreview.can_save_direct ? '预检：可保存商品变更' : '预检：暂不能直接保存商品变更' }}</strong>
+              <p>商品金额（{{ amendmentPreview.currency }}）：{{ amendmentPreview.old_items_gross }} → {{ amendmentPreview.new_items_gross }}（差额 {{ amendmentPreview.gross_delta }}）。不代表最终应收/退款金额。</p>
+              <p v-for="(issue,i) in amendmentPreview.issues" :key="i" class="erp-field-error" role="alert">{{ issue }}</p>
+              <div v-for="(row,i) in amendmentPreview.rows.filter(row => row.operation !== 'unchanged')" :key="i" class="ord-amendment-diff">
+                {{ row.operation === 'add' ? '增加' : row.operation === 'remove' ? '移除' : '更换' }}：
+                {{ row.before?.sku || '—' }} × {{ row.before?.quantity ?? 0 }} → {{ row.after?.sku || '—' }} × {{ row.after?.quantity ?? 0 }}
+              </div>
+              <strong>单仓当前库存核对</strong>
+              <p v-for="wh in amendmentPreview.stock_by_warehouse" :key="wh.warehouse_id">
+                {{ wh.warehouse_name }}：{{ wh.single_warehouse_candidate ? '全部 SKU 当前库存满足' : '存在缺货、未确认库存或不支持自动分配' }}
+              </p>
+              <small>{{ amendmentPreview.inventory_note }}</small>
+            </section>
           </template>
         </div>
 
@@ -1259,6 +1348,13 @@ const submitReplacement = () => {
 .ord-item-amendment-info { margin: 0 0 12px; font-size: 12px; color: #72510f; background: #fff9e9; padding: 8px 10px; border-radius: 8px; }
 .ord-item-gift-hint { margin: 8px 0 0; font-size: 12px; color: #52656d; }
 .ord-add-product { margin-top: 10px; }
+.ord-amendment-actions { display:flex; align-items:center; gap:10px; margin-top:12px; }
+.ord-amendment-actions small { font-size:11px; color:#667781; }
+.ord-amendment-preview { margin-top:12px; padding:12px; border:1px solid #d1e3de; border-radius:8px; background:#f7fbfa; }
+.ord-amendment-preview p { margin:5px 0; font-size:12px; }
+.ord-amendment-preview strong { display:block; margin:8px 0; font-size:13px; }
+.ord-amendment-diff { font-size:12px; padding:5px 0; border-bottom:1px solid #e7e7e7; }
+
 .ord-item-row {
   display: grid;
   grid-template-columns: 2fr 2fr 1fr 1fr;
