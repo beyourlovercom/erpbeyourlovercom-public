@@ -154,9 +154,15 @@ final class OverseaWarehouseController
         }
 
         try {
-            $file = $confirmed
-                ? $this->outboundFiles->exportReviewed($warehouse, $plan['valid'])
-                : $this->outboundFiles->export($warehouse, $shipments);
+            if ($confirmed && $request->query('mode') === 'draft') {
+                $file = $this->outboundFiles->exportReviewDraft($warehouse, $shipments, $plan['issues']);
+            } elseif ($confirmed && in_array($request->query('mode', 'valid'), ['valid', null], true)) {
+                $file = $this->outboundFiles->exportReviewed($warehouse, $plan['valid']);
+            } elseif ($confirmed) {
+                return $this->exportFailure($request, $warehouse, '未知导出模式，请重新选择。', 422);
+            } else {
+                $file = $this->outboundFiles->export($warehouse, $shipments);
+            }
         } catch (DomainException|InvalidArgumentException|HttpExceptionInterface $e) {
             // The provider export validation deliberately fails closed. Surface the
             // offending order/field without replacing the error with a 500 page.
