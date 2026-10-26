@@ -24,6 +24,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Validator;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -303,7 +304,14 @@ final class OrderController
         }
         $validated = $validator->validated();
 
-        return response()->json($previews->preview($order, $validated['items']));
+        try {
+            return response()->json($previews->preview($order, $validated['items']));
+        } catch (ValidationException $e) {
+            return response()->json([
+                'message' => '订单商品预检未通过。',
+                'errors' => $e->errors(),
+            ], 422);
+        }
     }
 
     public function update(Request $request, Order $order): RedirectResponse
