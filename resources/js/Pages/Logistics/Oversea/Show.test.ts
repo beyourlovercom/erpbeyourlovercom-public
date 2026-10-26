@@ -69,7 +69,7 @@ describe('Oversea Dede file exchange workbench', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('downloads only reviewed valid rows plus an exception sheet after explicit consent', async () => {
+  it('downloads only reviewed valid provider rows after explicit consent', async () => {
     const blob = new Blob(['xlsx bytes'], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok:true, status:200, json:async () => ({
@@ -96,7 +96,7 @@ describe('Oversea Dede file exchange workbench', () => {
     await wrapper.get('a[href="/logistics/oversea/us-moreplus/export"]').trigger('click')
     await flushPromises()
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(wrapper.get('.export-review-panel').text()).toContain('1 笔异常')
+    expect(wrapper.get('.export-review-panel').text()).toContain('1 笔问题订单')
     const confirm = wrapper.findAll('.export-review-actions button').find(b => b.text().includes('仅下载'))
     await confirm!.trigger('click')
     await flushPromises()
