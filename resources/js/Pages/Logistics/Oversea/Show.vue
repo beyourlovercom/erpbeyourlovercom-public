@@ -100,9 +100,9 @@ const exportError = async (response:Response): Promise<string> => {
     : response.status === 422 ? '导出校验未通过，请重新查看订单数据。'
     : '导出服务暂时不可用，请联系管理员查询日志。'
 }
-const downloadXlsx = async (accepted:ExportPreflight|null) => {
+const downloadXlsx = async (accepted:ExportPreflight|null, mode:'valid'|'draft' = 'valid') => {
   const url = accepted
-    ? `${basePath.value}/export?confirm=1&token=${encodeURIComponent(accepted.token)}`
+    ? `${basePath.value}/export?confirm=1&token=${encodeURIComponent(accepted.token)}${mode === 'draft' ? '&mode=draft' : ''}`
     : `${basePath.value}/export`
   const response = await fetch(url, {
     credentials:'same-origin',
@@ -139,13 +139,16 @@ const downloadXlsx = async (accepted:ExportPreflight|null) => {
   exportReview.value = null
   publishGlobalFeedback({
     state:'SUCCESS',
-    title:accepted && accepted.issue_count ? '合规仓库下单表已开始下载' : '仓库下单表已开始下载',
-    message:accepted && accepted.issue_count
-      ? `可下单 ${accepted.valid_count} 笔；${accepted.issue_count} 笔异常需单独下载问题清单，未混入仓库模板。`
-      : filename,
+    title:mode === 'draft' ? '全量核对草稿已下载'
+      : accepted && accepted.issue_count ? '合规仓库下单表已开始下载' : '仓库下单表已开始下载',
+    message:mode === 'draft'
+      ? `全量 ${accepted?.total_count ?? 0} 笔，含 ${accepted?.issue_count ?? 0} 笔待修正。核对草稿不可直接提交仓库。`
+      : accepted && accepted.issue_count
+        ? `可下单 ${accepted.valid_count} 笔；${accepted.issue_count} 笔异常需单独下载问题清单，未混入仓库模板。`
+        : filename,
   })
 }
-const runExport = async (accepted:ExportPreflight|null = null) => {
+const runExport = async (accepted:ExportPreflight|null = null, mode:'valid'|'draft' = 'valid') => {
   if (exportingOrders.value || !props.warehouse) return
   exportingOrders.value = true
   publishGlobalFeedback({
@@ -154,7 +157,7 @@ const runExport = async (accepted:ExportPreflight|null = null) => {
   })
   try {
     if (accepted) {
-      await downloadXlsx(accepted)
+      await downloadXlsx(accepted, mode)
       return
     }
     exportReview.value = null
@@ -189,7 +192,7 @@ const runExport = async (accepted:ExportPreflight|null = null) => {
   }
 }
 const downloadOutboundFile = () => runExport()
-const confirmReviewedExport = () => { if (exportReview.value) void runExport(exportReview.value) }
+const confirmReviewedExport = (mode:'valid'|'draft' = 'valid') => { if (exportReview.value) void runExport(exportReview.value, mode) }
 // The provider XLSX must remain exactly one sheet. The optional issue CSV
 // provides all skipped orders and is never submitted to the WMS.
 const downloadExportIssues = () => {
@@ -315,11 +318,12 @@ const compactPages = computed<(number|string)[]>(() => {
             <td><a v-if="issue.order_id" :href="`/orders/${issue.order_id}`">查看订单</a><span v-else>—</span></td>
           </tr></tbody></table>
         </div>
-        <p class="export-review-notice">继续下载时仅导出 {{ exportReview.valid_count }} 笔符合仓库模板的订单，原始 XLSX 格式不变；{{ exportReview.issue_count }} 笔异常不会包含在仓库文件中。可单独下载问题清单 CSV，修改后再次导出。</p>
+        <p class="export-review-notice">你可以返回修改、下载 {{ exportReview.valid_count }} 笔合规仓库下单表，或继续导出全部 {{ exportReview.total_count }} 笔为“人工核对草稿”。全量草稿保留问题字段原始值及所有 SKU，但<strong>不可直接上传仓库</strong>；标准下单表不会混入异常数据。另可下载问题清单 CSV。</p>
         <div class="export-review-actions">
           <button type="button" class="file-button" @click="downloadExportIssues">下载问题清单 CSV</button>
           <button type="button" class="file-button" @click="cancelReviewedExport">返回修改</button>
-          <button type="button" class="file-button primary" :disabled="exportingOrders" @click="confirmReviewedExport">继续下载 {{ exportReview.valid_count }} 笔合规订单</button>
+          <button type="button" class="file-button primary" :disabled="exportingOrders || exportReview.valid_count === 0" @click="confirmReviewedExport('valid')">仅下载 {{ exportReview.valid_count }} 笔合规订单</button>
+          <button type="button" class="file-button" :disabled="exportingOrders" @click="confirmReviewedExport('draft')">继续导出全部 {{ exportReview.total_count }} 笔（核对草稿）</button>
         </div>
       </section>
       <div v-if="warehouse && view === 'pending'" class="oversea-file-flow">
