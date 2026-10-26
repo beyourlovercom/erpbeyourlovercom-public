@@ -175,6 +175,85 @@ final class ProductOrderIntegrationTest extends TestCase
         $this->assertSame('SNAP-UPD-002', $order->items->first()->sku);
     }
 
+    public function test_noop_item_payload_preserves_existing_item_ids_on_note_update(): void
+    {
+        $user = $this->userWith(['orders.view', 'orders.create', 'orders.edit']);
+        $first = Product::create(['woocommerce_product_id' => 9010, 'sku' => 'NOOP-A', 'name' => 'Noop A', 'product_type' => 'simple']);
+        $second = Product::create(['woocommerce_product_id' => 9011, 'sku' => 'NOOP-B', 'name' => 'Noop B', 'product_type' => 'simple']);
+        $this->actingAs($user)->post('/customers/orders', $this->orderPayload([
+            'external_order_number' => 'NOOP-001', 'items' => [
+                ['product_id' => $first->id, 'quantity' => 1, 'unit_price' => '5.00'],
+                ['product_id' => $second->id, 'quantity' => 2, 'unit_price' => '0.00'],
+            ],
+        ]))->assertRedirect();
+        $order = Order::with('items')->latest('id')->firstOrFail();
+        $beforeIds = $order->items->pluck('id')->sort()->values()->all();
+        $sameRows = $order->items->map(fn ($item) => [
+            'id' => $item->id, 'product_id' => $item->product_id, 'quantity' => $item->quantity,
+            'product_summary' => $item->product_summary, 'unit_price' => $item->unit_price,
+        ])->all();
+        $this->actingAs($user)->patch("/customers/orders/{$order->id}", [
+            'order_note' => 'Changed note only', 'items' => $sameRows,
+        ])->assertRedirect();
+        $this->assertSame($beforeIds, $order->fresh()->items->pluck('id')->sort()->values()->all());
+        $this->assertDatabaseHas('orders', ['id' => $order->id, 'order_note' => 'Changed note only']);
+    }
+
+    public function test_amending_unallocated_items_preserves_surviving_ids_and_adds_zero_price_gift(): void
+    {
+        $user = $this->userWith(['orders.view', 'orders.create', 'orders.edit']);
+        $original = Product::create(['woocommerce_product_id' => 9012, 'sku' => 'COLOR-RED', 'name' => 'Red', 'product_type' => 'simple']);
+        $replacement = Product::create(['woocommerce_product_id' => 9013, 'sku' => 'COLOR-BLUE', 'name' => 'Blue', 'product_type' => 'simple']);
+        $gift = Product::create(['woocommerce_product_id' => 9014, 'sku' => 'GIFT-A', 'name' => 'Gift', 'product_type' => 'simple']);
+        $this->actingAs($user)->post('/customers/orders', $this->orderPayload([
+            'external_order_number' => 'AMEND-001',
+            'items' => [['product_id' => $original->id, 'quantity' => 1, 'unit_price' => '79.00']],
+        ]))->assertRedirect();
+        $order = Order::with('items')->latest('id')->firstOrFail();
+        $oldItemId = $order->items->first()->id;
+
+        $this->actingAs($user)->patch("/customers/orders/{$order->id}", [
+            'items' => [
+                ['id' => $oldItemId, 'product_id' => $replacement->id, 'quantity' => 2, 'unit_price' => '79.00'],
+                ['id' => null, 'product_id' => $gift->id, 'quantity' => 1, 'unit_price' => '0.00'],
+            ],
+        ])->assertRedirect();
+        $this->assertDatabaseHas('order_items', [
+            'id' => $oldItemId, 'order_id' => $order->id, 'sku' => 'COLOR-BLUE', 'quantity' => 2, 'line_revenue' => '158.00',
+        ]);
+        $this->assertDatabaseHas('order_items', [
+            'order_id' => $order->id, 'sku' => 'GIFT-A', 'quantity' => 1, 'line_revenue' => '0.00',
+        ]);
+        $this->assertCount(2, $order->fresh()->items);
+    }
+
+    public function test_item_change_after_allocation_is_rejected_but_note_only_save_keeps_id(): void
+    {
+        $user = $this->userWith(['orders.view', 'orders.create', 'orders.edit']);
+        $product = Product::create(['woocommerce_product_id' => 9015, 'sku' => 'LOCKED-A', 'name' => 'Locked', 'product_type' => 'simple']);
+        $this->actingAs($user)->post('/customers/orders', $this->orderPayload([
+            'external_order_number' => 'LOCKED-001',
+            'items' => [['product_id' => $product->id, 'quantity' => 1, 'unit_price' => '19.00']],
+        ]))->assertRedirect();
+        $order = Order::with('items')->latest('id')->firstOrFail();
+        $line = $order->items->first();
+        $order->fulfillmentAllocation()->create(['status' => 'submitted', 'decision_source' => 'manual', 'plan_snapshot' => []]);
+
+        $this->actingAs($user)->patch("/customers/orders/{$order->id}", [
+            'items' => [['id' => $line->id, 'product_id' => $product->id, 'quantity' => 3, 'unit_price' => '19.00']],
+        ])->assertSessionHasErrors(['items']);
+        $this->assertDatabaseHas('order_items', ['id' => $line->id, 'quantity' => 1]);
+
+        $this->actingAs($user)->patch("/customers/orders/{$order->id}", [
+            'order_note' => 'Allowed note', 'items' => [[
+                'id' => $line->id, 'product_id' => $product->id,
+                'quantity' => 1, 'product_summary' => $line->product_summary, 'unit_price' => '19.00',
+            ]],
+        ])->assertRedirect();
+        $this->assertDatabaseHas('order_items', ['id' => $line->id, 'quantity' => 1]);
+        $this->assertDatabaseHas('orders', ['id' => $order->id, 'order_note' => 'Allowed note']);
+    }
+
     public function test_historical_rows_remain_readable_when_items_not_replaced(): void
     {
         $order = Order::create([
