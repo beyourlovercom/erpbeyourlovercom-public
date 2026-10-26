@@ -313,17 +313,15 @@ final class OverseaWarehouseWorkbenchTest extends TestCase
         file_put_contents($tmp, $response->getContent());
         $zip = new ZipArchive;
         $this->assertTrue($zip->open($tmp) === true);
-        $sheet2 = $zip->getFromName('xl/worksheets/sheet2.xml');
+        $this->assertFalse($zip->locateName('xl/worksheets/sheet2.xml')); // Provider must see its original one-sheet schema.
         $workbook = $zip->getFromName('xl/workbook.xml');
         $zip->close();
         @unlink($tmp);
-        $this->assertIsString($sheet2);
-        $this->assertStringContainsString('007erp-0920-c40882', $sheet2);
-        $this->assertStringContainsString('缺少电话', $sheet2);
         $workbookDoc = new DOMDocument;
         $this->assertTrue($workbookDoc->loadXML($workbook));
         $sheets = $workbookDoc->getElementsByTagNameNS('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'sheet');
-        $this->assertSame('异常订单-请勿提交仓库', $sheets->item(1)?->getAttribute('name'));
+        $this->assertSame(1, $sheets->length);
+        $this->assertStringNotContainsString('C40882-007', $response->getContent());
         $this->assertDatabaseHas('shipments', ['order_id' => $good->id, 'shipment_status' => 'pending']);
         $this->assertDatabaseHas('shipments', ['order_id' => $bad->id, 'shipment_status' => 'pending']);
         // The confirmation token is one-time use: no old preview can be silently replayed.
