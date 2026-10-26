@@ -97,7 +97,7 @@ describe('Oversea Dede file exchange workbench', () => {
     await flushPromises()
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(wrapper.get('.export-review-panel').text()).toContain('1 笔异常')
-    const confirm = wrapper.findAll('.export-review-actions button').find(b => b.text().includes('仍然下载'))
+    const confirm = wrapper.findAll('.export-review-actions button').find(b => b.text().includes('继续下载'))
     await confirm!.trigger('click')
     await flushPromises()
     expect(fetchMock).toHaveBeenLastCalledWith(
@@ -106,7 +106,7 @@ describe('Oversea Dede file exchange workbench', () => {
     )
     expect(filename).toBe('007-us-moreplus-orders-261026.xlsx')
     expect(globalFeedback.value.state).toBe('SUCCESS')
-    expect(globalFeedback.value.message).toContain('待修复 1 笔')
+    expect(globalFeedback.value.message).toContain('1 笔异常需单独下载问题清单')
   })
 
   it('downloads clean WMS spreadsheet without a confirmation dialog', async () => {
