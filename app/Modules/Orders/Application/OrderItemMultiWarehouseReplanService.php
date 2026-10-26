@@ -137,6 +137,7 @@ final class OrderItemMultiWarehouseReplanService
                 abort_if($warehouses->count() < $children->count(), 409,
                     '减少发货仓段数可能删除既有子履约与库存释放记录，当前禁止，请使用履约历史保全流程。');
                 abort_if($children->count() < 2
+                    || $children->count() !== count((array) ($allocation->plan_snapshot['segments'] ?? []))
                     || $children->contains(fn (Order $child) =>
                         $child->fulfillment_role !== 'original' || $child->order_kind?->value !== 'fulfillment_derived'),
                     409, '拆分履约结构不完整或含补发记录，不能直接重建。');
