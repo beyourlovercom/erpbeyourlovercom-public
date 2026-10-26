@@ -126,6 +126,13 @@ final class FulfillmentDerivedOrderService
     {
         $warehouseId = (int) ($segment['warehouse_id'] ?? 0);
         abort_if($warehouseId <= 0, 422, '履约方案缺少有效仓库');
+        $reservation = InventoryReservation::query()->where('order_id', $order->getKey())
+            ->whereIn('status', ['reserved', 'committed'])->first(['warehouse_id']);
+        abort_if(
+            $reservation && (int) $reservation->warehouse_id !== $warehouseId,
+            409,
+            '目标发货仓库与当前库存预留仓库不同，必须先受控重规划，不得沿用旧预留'
+        );
         $attributes = [
             'warehouse_id' => $warehouseId,
             'warehouse_selection_source' => 'allocation',
