@@ -19,6 +19,7 @@ use Illuminate\Support\LazyCollection;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use App\Modules\Inventory\Infrastructure\Models\InventoryReservation;
+use App\Modules\Orders\Infrastructure\Models\Order;
 
 final class OrderService
 {
