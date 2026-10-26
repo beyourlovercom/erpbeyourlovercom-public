@@ -89,6 +89,44 @@ final class OrderItemAtomicReplanTest extends TestCase
         );
     }
 
+    public function test_authorized_http_replan_endpoint_commits_only_after_explicit_revision_and_reason(): void
+    {
+        [$actor, $order, $warehouse, $red, $blue, $old] = $this->scenario();
+        $revision = app(OrderAmendmentRevision::class)->forOrder($order);
+        $line = $order->items()->firstOrFail();
+        $this->actingAs($actor)->postJson("/customers/orders/{$order->id}/items/replan", [
+            'items' => [[
+                'id' => $line->id, 'product_id' => $blue->id,
+                'quantity' => 3, 'unit_price' => '19.99',
+            ]],
+            'assignments' => [['item_index' => 0, 'source_code' => 'US-LA']],
+            'expected_revision' => $revision,
+            'reason' => 'Customer requested blue version',
+        ])->assertOk()->assertJsonPath('warehouse_id', $warehouse->id)
+            ->assertJsonPath('previous_reservation_id', $old->id)
+            ->assertJsonPath('state', 'pending_manual_fulfillment');
+
+        $this->assertDatabaseHas('order_items', [
+            'id' => $line->id, 'sku' => 'ATOMIC-BLUE', 'quantity' => 3,
+        ]);
+        $this->assertDatabaseHas('inventory_reservations', ['id' => $old->id, 'status' => 'released']);
+    }
+
+    public function test_http_replan_requires_permission_and_does_not_touch_held_stock(): void
+    {
+        [$actor, $order, $warehouse, $red, $blue, $old] = $this->scenario();
+        $viewer = User::factory()->create(['is_active' => true]);
+        $revision = app(OrderAmendmentRevision::class)->forOrder($order);
+        $this->actingAs($viewer)->postJson("/customers/orders/{$order->id}/items/replan", [
+            'items' => [['id' => $order->items()->firstOrFail()->id,
+                'product_id' => $blue->id, 'quantity' => 3, 'unit_price' => '19.99']],
+            'assignments' => [['item_index' => 0, 'source_code' => 'US-LA']],
+            'expected_revision' => $revision, 'reason' => 'Not authorized to change order',
+        ])->assertForbidden();
+        $this->assertDatabaseHas('inventory_reservations', ['id' => $old->id, 'status' => 'reserved']);
+        $this->assertSame($revision, app(OrderAmendmentRevision::class)->forOrder($order));
+    }
+
     public function test_success_replaces_single_hold_and_order_item_in_one_transaction(): void
     {
         [$actor, $order, $wh, $red, $blue, $old] = $this->scenario();
