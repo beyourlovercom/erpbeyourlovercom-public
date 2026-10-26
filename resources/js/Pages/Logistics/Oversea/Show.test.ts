@@ -97,7 +97,7 @@ describe('Oversea Dede file exchange workbench', () => {
     await flushPromises()
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(wrapper.get('.export-review-panel').text()).toContain('1 笔异常')
-    const confirm = wrapper.findAll('.export-review-actions button').find(b => b.text().includes('继续下载'))
+    const confirm = wrapper.findAll('.export-review-actions button').find(b => b.text().includes('仅下载'))
     await confirm!.trigger('click')
     await flushPromises()
     expect(fetchMock).toHaveBeenLastCalledWith(
@@ -107,6 +107,43 @@ describe('Oversea Dede file exchange workbench', () => {
     expect(filename).toBe('007-us-moreplus-orders-261026.xlsx')
     expect(globalFeedback.value.state).toBe('SUCCESS')
     expect(globalFeedback.value.message).toContain('1 笔异常需单独下载问题清单')
+  })
+
+  it('allows operator to export every order as a clearly labelled non-provider review draft', async () => {
+    const blob = new Blob(['raw review draft'], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok:true, status:200, json:async () => ({
+        total_count:1, valid_count:0, issue_count:1, token:'draft-confirm',
+        issues:[{ order_id:88, order_number:'C88-007', reason:'电话缺失' }],
+      }) })
+      .mockResolvedValueOnce({
+        ok:true, status:200,
+        headers:new Headers({
+          'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'content-disposition':'attachment; filename="007-us-moreplus-review-draft-261026.xlsx"',
+        }),
+        blob:async () => blob,
+      })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL:vi.fn(() => 'blob:draft'), revokeObjectURL:vi.fn() }))
+    let filename = ''
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function(this:HTMLAnchorElement) {
+      filename = this.download
+    })
+    const wrapper = mountPage()
+    await wrapper.get('a[href="/logistics/oversea/us-moreplus/export"]').trigger('click')
+    await flushPromises()
+    const standard = wrapper.findAll('.export-review-actions button').find(b => b.text().includes('仅下载'))
+    expect(standard?.attributes('disabled')).toBeDefined()
+    const draft = wrapper.findAll('.export-review-actions button').find(b => b.text().includes('核对草稿'))
+    await draft!.trigger('click')
+    await flushPromises()
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/logistics/oversea/us-moreplus/export?confirm=1&token=draft-confirm&mode=draft',
+      expect.objectContaining({ credentials:'same-origin' }),
+    )
+    expect(filename).toContain('review-draft')
+    expect(globalFeedback.value.message).toContain('不可直接提交仓库')
   })
 
   it('downloads clean WMS spreadsheet without a confirmation dialog', async () => {
