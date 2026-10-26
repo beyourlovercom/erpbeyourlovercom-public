@@ -231,7 +231,7 @@ describe('Orders/Show V2', () => {
     expect(wrapper.find('.ord-shipment-modal').exists()).toBe(true)
     expect(wrapper.get('.ord-shipment-field-error').text()).toContain('不能包含中文')
     expect(tracking.attributes('aria-invalid')).toBe('true')
-    expect(note.element.value).toBe('这段中文属于物流备注')
+    expect((note.element as HTMLTextAreaElement).value).toBe('这段中文属于物流备注')
     expect(globalFeedback.value.state).toBe('BLOCKED')
     expect(globalFeedback.value.message).toContain('不能包含中文')
     await tracking.setValue('00340435069161712046')
@@ -255,7 +255,7 @@ describe('Orders/Show V2', () => {
     await wrapper.vm.$nextTick()
     expect(wrapper.get('.ord-shipment-field-error').text()).toContain('无效字符')
     expect(wrapper.find('.ord-shipment-modal').exists()).toBe(true)
-    expect(wrapper.get('.ord-shipment-form input[placeholder="追踪号，可稍后补录"]').element.value).toBe('00340435069161712046')
+    expect((wrapper.get('.ord-shipment-form input[placeholder="追踪号，可稍后补录"]').element as HTMLInputElement).value).toBe('00340435069161712046')
     expect(globalFeedback.value.message).toContain('无效字符')
   })
 
@@ -268,7 +268,7 @@ describe('Orders/Show V2', () => {
     await save!.trigger('click')
     expect(router.post).not.toHaveBeenCalled()
     expect(wrapper.get('.ord-shipment-field-error').text()).toContain('中文')
-    expect(wrapper.get('.ord-shipment-note textarea').element.value).toBe('备注中文可保留')
+    expect((wrapper.get('.ord-shipment-note textarea').element as HTMLTextAreaElement).value).toBe('备注中文可保留')
   })
 
   it('offers direct fulfillment execution on a pending single order', async () => {
