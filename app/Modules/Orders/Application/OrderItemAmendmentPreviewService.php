@@ -206,6 +206,7 @@ final class OrderItemAmendmentPreviewService
             && ! $order->manualSync()->exists()
             && $order->fulfillmentAllocation?->status === 'submitted'
             && count((array) ($order->fulfillmentAllocation?->plan_snapshot['segments'] ?? [])) >= 2
+            && count((array) ($order->fulfillmentAllocation?->plan_snapshot['segments'] ?? [])) === $children->count()
             && ! $multiHeld->contains(fn ($held) => $held->status === 'committed')
             && $multiHeld->where('order_id', $order->id)->isEmpty()
             && $multiHeld->count() === $children->count()
