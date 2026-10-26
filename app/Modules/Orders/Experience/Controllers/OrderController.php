@@ -17,8 +17,10 @@ use App\Modules\Orders\Application\KolOrderAccessScope;
 use App\Modules\Orders\Application\OrderKind;
 use App\Modules\Orders\Application\OrderPackagingReferenceProjection;
 use App\Modules\Orders\Application\OrderService;
+use App\Modules\Orders\Application\OrderItemAmendmentPreviewService;
 use App\Modules\Orders\Application\OrderSourceType;
 use App\Modules\Orders\Infrastructure\Models\Order;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -282,6 +284,18 @@ final class OrderController
             'can_use_recommendation' => $canUseRecommendation,
             'full_allocation_url' => route('logistics.wait-stock'),
         ];
+    }
+
+    public function previewItemAmendment(Request $request, Order $order, OrderItemAmendmentPreviewService $previews): JsonResponse
+    {
+        $this->authorizeKind($request, $order);
+        KolOrderAccessScope::authorize($request->user(), $order);
+        $validated = $request->validate([
+            ...$this->updateRules($order),
+            'items' => ['required', 'array', 'min:1'],
+        ]);
+
+        return response()->json($previews->preview($order, $validated['items']));
     }
 
     public function update(Request $request, Order $order): RedirectResponse
