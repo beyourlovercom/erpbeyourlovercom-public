@@ -11,7 +11,7 @@ final class OrderAmendmentRevision
     public function forOrder(Order $order): string
     {
         $order = Order::query()->whereKey($order->getKey())->firstOrFail();
-        $children = $order->fulfillmentChildren()->with('shipment')->orderBy('id')->get();
+        $children = $order->fulfillmentChildren()->with(['shipment', 'items'])->orderBy('id')->get();
         $ids = $children->pluck('id')->push($order->id)->all();
         $reservations = InventoryReservation::query()->whereIn('order_id', $ids)
             ->whereIn('status', ['reserved', 'committed'])->with('items')
@@ -37,7 +37,12 @@ final class OrderAmendmentRevision
             ] : null,
             'children' => $children->map(fn (Order $child) => [
                 $child->id, $child->order_status?->value, $child->updated_at?->toISOString(),
+                $child->fulfillment_suffix, $child->fulfillment_role,
                 $child->shipment?->only(['id', 'warehouse_id', 'shipment_status', 'tracking_number', 'shipped_at', 'updated_at']),
+                $child->items->sortBy('id')->map(fn ($item) => [
+                    $item->id, $item->product_id, $item->sku, $item->source_sku,
+                    (int) $item->quantity, (string) $item->unit_price, $item->updated_at?->toISOString(),
+                ])->values()->all(),
             ])->all(),
             'reservations' => $reservations->map(fn ($r) => [
                 $r->id, $r->order_id, $r->warehouse_id, $r->status,
