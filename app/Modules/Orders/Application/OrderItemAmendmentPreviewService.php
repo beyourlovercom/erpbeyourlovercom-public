@@ -26,7 +26,7 @@ final class OrderItemAmendmentPreviewService
      */
     public function preview(Order $order, array $proposed): array
     {
-        $order->loadMissing(['items', 'shipment', 'fulfillmentAllocation', 'fulfillmentChildren']);
+        $order->loadMissing(['items', 'shipment', 'fulfillmentAllocation', 'fulfillmentChildren.shipment']);
         $existing = $order->items->keyBy('id');
         $productIds = collect($proposed)->pluck('product_id')->map(fn ($id): int => (int) $id)->unique()->values()->all();
         $products = Product::query()->whereIn('id', $productIds)->get()->keyBy('id');
@@ -170,6 +170,47 @@ final class OrderItemAmendmentPreviewService
             && ! $order->procurementOrder()->exists()
             && ! $order->shipmentAttempts()->exists();
 
+        // Multi-warehouse is a separate, stricter protocol. Every existing
+        // child must remain pending with exactly one RESERVED hold matching its
+        // shipment warehouse. Partial shipment/committed stock fail closed.
+        $childIds = $children->pluck('id')->all();
+        $multiHeld = InventoryReservation::query()->whereIn('order_id', [...$childIds, $order->id])
+            ->whereIn('status', ['reserved', 'committed'])->get();
+        $multiChildSafe = $children->count() >= 2
+            && $children->every(function (Order $child): bool {
+                $shipment = $child->shipment;
+                return $child->fulfillment_role === 'original'
+                    && $child->order_status?->value === 'pending_shipment'
+                    && $child->order_kind?->value === 'fulfillment_derived'
+                    && $shipment !== null && $shipment->shipment_status === 'pending'
+                    && blank($shipment->tracking_number) && $shipment->shipped_at === null
+                    && ! $child->shipmentAttempts()->exists()
+                    && ! $child->manualSync()->exists()
+                    && ! $child->financials()->exists()
+                    && ! $child->costEntries()->exists()
+                    && ! $child->procurementOrder()->exists()
+                    && ! $child->replacementFulfillments()->exists()
+                    && ! $child->logisticsReview()->exists()
+                    && ! $shipment->overseaReview()->exists()
+                    && $multiHeld->where('order_id', $child->id)->count() === 1
+                    && $multiHeld->where('order_id', $child->id)->first()?->status === 'reserved'
+                    && (int) $multiHeld->where('order_id', $child->id)->first()?->warehouse_id
+                        === (int) $shipment->warehouse_id;
+            });
+        $multiEligible = $changed
+            && ! $externalOrder && ! $financialized && ! $actuallyStarted
+            && $order->order_status?->value === 'pending_shipment'
+            && $order->fulfillment_parent_id === null
+            && ! $order->procurementOrder()->exists()
+            && ! $order->shipmentAttempts()->exists()
+            && ! $order->manualSync()->exists()
+            && $order->fulfillmentAllocation?->status === 'submitted'
+            && count((array) ($order->fulfillmentAllocation?->plan_snapshot['segments'] ?? [])) >= 2
+            && ! $multiHeld->contains(fn ($held) => $held->status === 'committed')
+            && $multiHeld->where('order_id', $order->id)->isEmpty()
+            && $multiHeld->count() === $children->count()
+            && $multiChildSafe;
+
         return [
             'order_id' => (int) $order->id,
             'expected_revision' => $this->revisions->forOrder($order),
@@ -185,6 +226,7 @@ final class OrderItemAmendmentPreviewService
             ])->values()->all(),
             'requires_replan' => $linked || $hasActiveReservation,
             'can_atomic_single_replan' => $singleAtomicEligible,
+            'can_atomic_multi_replan' => $multiEligible,
             'can_save_direct' => ! $changed || $issues === [],
             'issues' => $issues,
             'stock_by_warehouse' => $stock,
