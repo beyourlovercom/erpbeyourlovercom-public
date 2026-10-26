@@ -32,6 +32,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 use Inertia\Inertia;
 use Inertia\Response;
 use PDOException;
@@ -167,7 +168,12 @@ final class LogisticsController
 
     public function saveDraft(Request $request, Order $order): RedirectResponse
     {
-        $this->assistedFulfillment->saveDraft($order, $request->validate($this->draftRules()), $request->user());
+        $data = $request->validate($this->draftRules(), $this->shipmentValidationMessages());
+        try {
+            $this->assistedFulfillment->saveDraft($order, $data, $request->user());
+        } catch (HttpExceptionInterface $e) {
+            $this->rethrowShipmentValidation($e);
+        }
 
         return back()->with('success', '履约草稿已保存');
     }
@@ -351,10 +357,14 @@ final class LogisticsController
             'carrier' => ['required', 'string', 'max:128', Rule::exists('logistics_carriers', 'name')->where('is_active', true)],
             'service' => ['required', 'string', 'max:128'],
             'shipped_at' => ['required', 'date'],
-            'tracking_number' => ['nullable', 'string', 'max:128'],
+            'tracking_number' => $this->trackingNumberRules(),
             'logistics_note' => ['nullable', 'string', 'max:5000'],
-        ]);
-        $this->assistedFulfillment->markShipped($order, $data, $request->user());
+        ], $this->shipmentValidationMessages());
+        try {
+            $this->assistedFulfillment->markShipped($order, $data, $request->user());
+        } catch (HttpExceptionInterface $e) {
+            $this->rethrowShipmentValidation($e);
+        }
         $msg = empty($data['tracking_number']) ? '已标记发货，追踪号待填入' : '已标记发货，已生成待同步任务';
 
         return back()->with('success', $msg);
@@ -531,13 +541,52 @@ final class LogisticsController
         return $order->order_kind?->value === 'kol_fulfillment' ? "/kol/orders/{$order->id}" : "/customers/orders/{$order->id}";
     }
 
+    /** Keep user-facing Tracking rules aligned with ShipmentService::canonicalTrackingNumber(). */
+    private function trackingNumberRules(): array
+    {
+        return [
+            'nullable', 'string', 'max:128',
+            static function (string $attribute, mixed $value, \Closure $fail): void {
+                if ($value !== null && trim((string) $value) !== ''
+                    && preg_match('/\\A[A-Za-z0-9][A-Za-z0-9._:\\/+\\-]*\\z/', trim((string) $value)) !== 1) {
+                    $fail('Tracking 只能填写英文字母、数字及 . _ : / + -，不能包含中文、空格或备注。');
+                }
+            },
+        ];
+    }
+
+    private function shipmentValidationMessages(): array
+    {
+        return [
+            'tracking_number.max' => 'Tracking 最长 128 个字符。',
+            'warehouse_id.required' => '请选择发货仓库。',
+            'carrier.required' => '请选择物流商。',
+            'service.required' => '请选择运输 / 服务类型。',
+            'shipped_at.required' => '请选择发货时间。',
+            'shipped_at.date' => '发货时间格式不正确。',
+            'logistics_note.max' => '物流备注不能超过 5000 个字符。',
+        ];
+    }
+
+    /** Map actionable business 422 failures into Inertia field errors instead of a full error page. */
+    private function rethrowShipmentValidation(HttpExceptionInterface $e): never
+    {
+        if ($e->getStatusCode() === 422) {
+            $reason = trim($e->getMessage()) ?: '请检查物流字段后重新提交。';
+            $field = str_contains($reason, '追踪号') || str_contains($reason, 'Tracking')
+                ? 'tracking_number' : 'fulfillment';
+            throw ValidationException::withMessages([$field => $reason]);
+        }
+        throw $e;
+    }
+
     private function draftRules(): array
     {
         return [
             'warehouse_id' => ['nullable', 'integer', Rule::exists('warehouses', 'id')->where('is_active', true)],
             'carrier' => ['nullable', 'string', 'max:128', Rule::exists('logistics_carriers', 'name')->where('is_active', true)],
             'service' => ['nullable', 'string', 'max:128'],
-            'tracking_number' => ['nullable', 'string', 'max:128'],
+            'tracking_number' => $this->trackingNumberRules(),
             'shipped_at' => ['nullable', 'date'],
             'logistics_note' => ['nullable', 'string', 'max:5000'],
         ];

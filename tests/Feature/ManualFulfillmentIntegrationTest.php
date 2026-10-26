@@ -22,6 +22,43 @@ final class ManualFulfillmentIntegrationTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_fulfillment_rejects_chinese_tracking_as_field_error_without_shipping_or_reservation_writes(): void
+    {
+        [$user, $order, $product, $warehouse] = $this->scenario();
+        $payload = [
+            'warehouse_id' => $warehouse->id, 'carrier' => 'UPS', 'service' => 'Ground',
+            'tracking_number' => '填写中文查看错误',
+            'shipped_at' => '2026-10-26T14:40',
+            'logistics_note' => '这段中文放在物流备注是允许的',
+        ];
+        $this->actingAs($user)->from('/customers/orders/'.$order->id)
+            ->post('/logistics/orders/'.$order->id.'/ship', $payload)
+            ->assertRedirect('/customers/orders/'.$order->id)
+            ->assertSessionHasErrors('tracking_number');
+        $this->assertDatabaseMissing('shipments', [
+            'order_id' => $order->id, 'tracking_number' => '填写中文查看错误',
+        ]);
+        $this->assertDatabaseHas('orders', ['id' => $order->id, 'order_status' => 'pending_shipment']);
+        $this->assertDatabaseMissing('manual_syncs', ['order_id' => $order->id]);
+    }
+
+    public function test_fulfillment_draft_rejects_chinese_tracking_with_field_error_and_no_write(): void
+    {
+        [$user, $order, $product, $warehouse] = $this->scenario();
+        $this->actingAs($user)->from('/customers/orders/'.$order->id)
+            ->post('/logistics/orders/'.$order->id.'/draft', [
+                'warehouse_id' => $warehouse->id, 'carrier' => 'UPS',
+                'service' => 'Ground', 'tracking_number' => '单号有中文',
+                'logistics_note' => '允许正常中文备注',
+            ])
+            ->assertRedirect('/customers/orders/'.$order->id)
+            ->assertSessionHasErrors('tracking_number');
+        $this->assertDatabaseMissing('shipments', [
+            'order_id' => $order->id, 'tracking_number' => '单号有中文',
+        ]);
+        $this->assertDatabaseMissing('audit_records', ['action' => 'shipment.fulfillment_draft_saved']);
+    }
+
     public function test_logistics_shows_inventory_and_saves_manual_fulfillment(): void
     {
         [$user, $order, $product, $warehouse] = $this->scenario();

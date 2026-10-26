@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Head, router, useForm } from '@inertiajs/vue3'
 import { ref, computed } from 'vue'
+import { publishGlobalFeedback } from '../../lib/globalFeedback'
 
 const commonCurrencyOptions = [
   { value: 'USD', label: 'USD · 美元' },
@@ -343,6 +344,40 @@ const shipmentEditorOrderId = ref<number | null>(null)
 const shipmentEditorLabel = ref('')
 const shipmentEditorSaving = ref(false)
 const shipmentEditorError = ref('')
+const shipmentFieldErrors = ref<Record<string,string>>({})
+const shipmentTrackingErrorText = 'Tracking 只能填写英文字母、数字及 . _ : / + -，不能包含中文、空格或备注。'
+const shipmentTrackingPattern = /^[A-Za-z0-9][A-Za-z0-9._:\/+\-]*$/
+const clearShipmentFieldError = (field:string) => {
+  if (!shipmentFieldErrors.value[field]) return
+  const next = { ...shipmentFieldErrors.value }
+  delete next[field]
+  shipmentFieldErrors.value = next
+  if (Object.keys(next).length === 0) shipmentEditorError.value = ''
+}
+const reportShipmentErrors = (errors:Record<string,string>, action:string) => {
+  shipmentFieldErrors.value = errors
+  const first = Object.values(errors).find(Boolean) || '请检查物流信息后重试。'
+  shipmentEditorError.value = errors.fulfillment || '请修正红色提示的字段后重试。'
+  publishGlobalFeedback({
+    state:'BLOCKED', title:`${action}未完成`, message:first,
+    next:'请在当前弹窗修正红色提示字段，已填写的内容不会丢失。',
+  })
+}
+const shipmentLocalErrors = (needsCompleteFields:boolean):Record<string,string> => {
+  const draft = shipmentEditor.value
+  const errors:Record<string,string> = {}
+  if (needsCompleteFields) {
+    if (!draft.warehouse_id) errors.warehouse_id = '请选择发货仓库。'
+    if (!draft.carrier.trim()) errors.carrier = '请选择物流商。'
+    if (!draft.service.trim()) errors.service = '请选择运输 / 服务类型。'
+    if (!draft.shipped_at) errors.shipped_at = '请选择发货时间。'
+  }
+  const tracking = draft.tracking_number.trim()
+  if (tracking.length > 128) errors.tracking_number = 'Tracking 最长 128 个字符。'
+  else if (tracking && !shipmentTrackingPattern.test(tracking)) errors.tracking_number = shipmentTrackingErrorText
+  if (draft.logistics_note.length > 5000) errors.logistics_note = '物流备注不能超过 5000 个字符。'
+  return errors
+}
 const localDateTimeNow = () => {
   const now = new Date()
   const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
@@ -370,32 +405,36 @@ const openShipmentEditor = (target: {
     logistics_note: target.shipment?.logistics_note ?? '',
   }
   shipmentEditorError.value = ''
+  shipmentFieldErrors.value = {}
   shipmentEditorOpen.value = true
 }
 const closeShipmentEditor = () => { if (!shipmentEditorSaving.value) shipmentEditorOpen.value = false }
 const saveShipmentDraft = () => {
   if (!props.canOperateLogistics || !shipmentEditorOrderId.value || shipmentEditorSaving.value) return
+  const errors = shipmentLocalErrors(false)
+  if (Object.keys(errors).length) { reportShipmentErrors(errors, '保存草稿'); return }
   shipmentEditorSaving.value = true
   shipmentEditorError.value = ''
+  shipmentFieldErrors.value = {}
   router.post(`/logistics/orders/${shipmentEditorOrderId.value}/draft`, shipmentEditor.value, {
     preserveScroll: true,
-    onError: () => { shipmentEditorError.value = '保存草稿失败，请检查物流信息。' },
+    preserveState: true,
+    onError: (errors) => reportShipmentErrors(errors, '保存草稿'),
     onFinish: () => { shipmentEditorSaving.value = false },
   })
 }
 const confirmShipment = () => {
   if (!props.canOperateLogistics || !shipmentEditorOrderId.value || shipmentEditorSaving.value) return
-  const draft = shipmentEditor.value
-  if (!draft.warehouse_id) { shipmentEditorError.value = '请选择发货仓库'; return }
-  if (!draft.carrier.trim()) { shipmentEditorError.value = '请选择物流商'; return }
-  if (!draft.service.trim()) { shipmentEditorError.value = '请选择运输 / 服务类型'; return }
-  if (!draft.shipped_at) { shipmentEditorError.value = '请选择发货时间'; return }
+  const errors = shipmentLocalErrors(true)
+  if (Object.keys(errors).length) { reportShipmentErrors(errors, '确认发货'); return }
   shipmentEditorSaving.value = true
   shipmentEditorError.value = ''
-  router.post(`/logistics/orders/${shipmentEditorOrderId.value}/ship`, draft, {
+  shipmentFieldErrors.value = {}
+  router.post(`/logistics/orders/${shipmentEditorOrderId.value}/ship`, shipmentEditor.value, {
     preserveScroll: true,
+    preserveState: true,
     onSuccess: () => { shipmentEditorOpen.value = false },
-    onError: () => { shipmentEditorError.value = '确认发货失败，请检查物流信息。' },
+    onError: (errors) => reportShipmentErrors(errors, '确认发货'),
     onFinish: () => { shipmentEditorSaving.value = false },
   })
 }
@@ -933,15 +972,15 @@ const submitReplacement = () => {
         </header>
         <div class="ord-shipment-form">
           <label>发货仓库
-            <select v-model="shipmentEditor.warehouse_id" class="erp-select" :disabled="!canOperateLogistics" @change="applyShipmentWarehouseDefault"><option :value="null">请选择仓库</option><option v-for="warehouse in warehouses ?? []" :key="warehouse.id" :value="warehouse.id">{{ warehouse.name }} · {{ warehouse.code }}</option></select>
+            <select v-model="shipmentEditor.warehouse_id" class="erp-select" :class="{ 'ord-field-invalid': shipmentFieldErrors.warehouse_id }" :aria-invalid="Boolean(shipmentFieldErrors.warehouse_id)" :disabled="!canOperateLogistics" @change="applyShipmentWarehouseDefault(); clearShipmentFieldError('warehouse_id')"><option :value="null">请选择仓库</option><option v-for="warehouse in warehouses ?? []" :key="warehouse.id" :value="warehouse.id">{{ warehouse.name }} · {{ warehouse.code }}</option></select><small v-if="shipmentFieldErrors.warehouse_id" class="ord-shipment-field-error" role="alert">{{ shipmentFieldErrors.warehouse_id }}</small>
           </label>
           <label>物流商
-            <select v-model="shipmentEditor.carrier" class="erp-select" :disabled="!canOperateLogistics" @change="applyShipmentCarrierDefault"><option value="">请选择承运商</option><option v-for="carrier in carrierOptions ?? []" :key="carrier.value" :value="carrier.value">{{ carrier.label }}</option></select>
+            <select v-model="shipmentEditor.carrier" class="erp-select" :class="{ 'ord-field-invalid': shipmentFieldErrors.carrier }" :aria-invalid="Boolean(shipmentFieldErrors.carrier)" :disabled="!canOperateLogistics" @change="applyShipmentCarrierDefault(); clearShipmentFieldError('carrier')"><option value="">请选择承运商</option><option v-for="carrier in carrierOptions ?? []" :key="carrier.value" :value="carrier.value">{{ carrier.label }}</option></select><small v-if="shipmentFieldErrors.carrier" class="ord-shipment-field-error" role="alert">{{ shipmentFieldErrors.carrier }}</small>
           </label>
-          <label>运输 / 服务类型<select v-model="shipmentEditor.service" class="erp-select" :disabled="!canOperateLogistics || !shipmentEditor.carrier"><option value="">请选择服务类型</option><option v-for="service in shipmentServiceOptions" :key="service.id" :value="service.value">{{ service.label }}</option></select></label>
-          <label>Tracking<input v-model="shipmentEditor.tracking_number" class="erp-input" :disabled="!canOperateLogistics" placeholder="追踪号，可稍后补录"></label>
-          <label>发货时间<input v-model="shipmentEditor.shipped_at" class="erp-input" :disabled="!canOperateLogistics" type="datetime-local"></label>
-          <label class="ord-shipment-note">物流备注<textarea v-model="shipmentEditor.logistics_note" rows="3" class="erp-textarea" :disabled="!canOperateLogistics" placeholder="可填写包裹、异常或操作备注"></textarea></label>
+          <label>运输 / 服务类型<select v-model="shipmentEditor.service" class="erp-select" :class="{ 'ord-field-invalid': shipmentFieldErrors.service }" :aria-invalid="Boolean(shipmentFieldErrors.service)" :disabled="!canOperateLogistics || !shipmentEditor.carrier" @change="clearShipmentFieldError('service')"><option value="">请选择服务类型</option><option v-for="service in shipmentServiceOptions" :key="service.id" :value="service.value">{{ service.label }}</option></select><small v-if="shipmentFieldErrors.service" class="ord-shipment-field-error" role="alert">{{ shipmentFieldErrors.service }}</small></label>
+          <label>Tracking<input v-model="shipmentEditor.tracking_number" class="erp-input" :class="{ 'ord-field-invalid': shipmentFieldErrors.tracking_number }" :aria-invalid="Boolean(shipmentFieldErrors.tracking_number)" :disabled="!canOperateLogistics" placeholder="追踪号，可稍后补录" @input="clearShipmentFieldError('tracking_number')"><small v-if="shipmentFieldErrors.tracking_number" class="ord-shipment-field-error" role="alert">{{ shipmentFieldErrors.tracking_number }}</small></label>
+          <label>发货时间<input v-model="shipmentEditor.shipped_at" class="erp-input" :class="{ 'ord-field-invalid': shipmentFieldErrors.shipped_at }" :aria-invalid="Boolean(shipmentFieldErrors.shipped_at)" :disabled="!canOperateLogistics" type="datetime-local" @change="clearShipmentFieldError('shipped_at')"><small v-if="shipmentFieldErrors.shipped_at" class="ord-shipment-field-error" role="alert">{{ shipmentFieldErrors.shipped_at }}</small></label>
+          <label class="ord-shipment-note">物流备注<textarea v-model="shipmentEditor.logistics_note" rows="3" class="erp-textarea" :class="{ 'ord-field-invalid': shipmentFieldErrors.logistics_note }" :aria-invalid="Boolean(shipmentFieldErrors.logistics_note)" :disabled="!canOperateLogistics" placeholder="可填写包裹、异常或操作备注" @input="clearShipmentFieldError('logistics_note')"></textarea><small v-if="shipmentFieldErrors.logistics_note" class="ord-shipment-field-error" role="alert">{{ shipmentFieldErrors.logistics_note }}</small></label>
         </div>
         <p v-if="shipmentEditorError" class="ord-shipment-error">{{ shipmentEditorError }}</p>
         <p v-if="!canOperateLogistics" class="ord-shipment-readonly">当前账号为物流执行只读模式；物流员可以在这里直接填写物流并确认发货。</p>
@@ -1314,6 +1353,8 @@ const submitReplacement = () => {
 .ord-shipment-form label { display: grid; gap: 6px; color: #52656d; font-size: 11px; font-weight: 700; }
 .ord-shipment-note { grid-column: 1 / -1; }
 .ord-shipment-error { margin: 12px 0 0; color: #b44949; font-size: 12px; font-weight: 700; }
+.ord-shipment-form .ord-field-invalid { border-color: #cf303a; box-shadow: 0 0 0 1px rgba(207,48,58,.14); }
+.ord-shipment-form .ord-shipment-field-error { display: block; color: #cf303a; font-size: 11px; font-weight: 700; line-height: 1.45; }
 .ord-shipment-readonly { margin: 12px 0 0; padding: 9px 11px; border-radius: 9px; background: #f5f7f8; color: #66777e; font-size: 12px; }
 .ord-ship-action { white-space: nowrap; }
 .ord-fulfillment-row-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }

@@ -88,3 +88,9 @@ jobs:
           else
             ./node_modules/.bin/vitest run resources/js/Pages/Products/Index.test.ts resources/js/Pages/Identity/Users/Index.test.ts --maxWorkers=2
           fi
+
+      - name: Fulfillment Tracking 422 field validation regressions
+        shell: bash
+        run: |
+          php artisan test tests/Feature/ManualFulfillmentIntegrationTest.php --filter='test_fulfillment_rejects_chinese_tracking|test_fulfillment_draft_rejects_chinese_tracking' --no-ansi
+          ./node_modules/.bin/vitest run resources/js/Pages/Orders/Show.test.ts --maxWorkers=2
