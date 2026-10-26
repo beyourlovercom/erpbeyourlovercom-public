@@ -130,6 +130,12 @@ final class OrderItemMultiWarehouseReplanService
                 abort_unless($allocation && $allocation->status === 'submitted'
                     && count((array) ($allocation->plan_snapshot['segments'] ?? [])) >= 2,
                     409, '原订单不是已提交的多仓分仓方案。');
+                // A reduction in segment count would hard-delete a historical
+                // child and potentially its released reservation evidence.
+                // Preserve that history until a dedicated retirement protocol
+                // exists; support same-count replacements and expansion only.
+                abort_if($warehouses->count() < $children->count(), 409,
+                    '减少发货仓段数可能删除既有子履约与库存释放记录，当前禁止，请使用履约历史保全流程。');
                 abort_if($children->count() < 2
                     || $children->contains(fn (Order $child) =>
                         $child->fulfillment_role !== 'original' || $child->order_kind?->value !== 'fulfillment_derived'),
