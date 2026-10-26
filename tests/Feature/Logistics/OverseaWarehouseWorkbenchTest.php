@@ -416,8 +416,9 @@ final class OverseaWarehouseWorkbenchTest extends TestCase
         $this->assertSame('007erp-0920-c50999', $rows[1][0]);
         $this->assertSame('', $rows[1][4]); // Actual missing phone, never fabricated.
         $this->assertSame('REVIEW-SKU', $rows[1][11]);
-        $this->assertSame('SKU-11', $rows[11][11]);
-        $this->assertSame('11', $rows[11][12]);
+        $skuQuantities = array_column(array_slice($rows, 1), 12, 11);
+        $this->assertCount(11, $skuQuantities);
+        $this->assertSame('11', $skuQuantities['SKU-11']);
         $this->assertStringContainsString('存在问题', $rows[1][14]);
         $this->assertDatabaseHas('shipments', [
             'order_id' => $order->id, 'shipment_status' => 'pending', 'tracking_number' => null,
