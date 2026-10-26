@@ -1,8 +1,14 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { reactive } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
 import Show from './Show.vue'
+import axios from 'axios'
+import { globalFeedback } from '../../lib/globalFeedback'
 import { router } from '@inertiajs/vue3'
+
+vi.mock('axios', () => ({
+  default: { post:vi.fn(), isAxiosError: (value:unknown) => Boolean(value && typeof value === 'object' && 'response' in value) },
+}))
 
 vi.mock('@inertiajs/vue3', () => ({
   Head: { props: ['title'], template: '<title>{{ title }}</title>' },
@@ -362,6 +368,35 @@ describe('Orders/Show V2', () => {
   it('defaults to View Mode: no active submit button', () => {
     const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.find('button[type="submit"]').exists()).toBe(false)
+  })
+
+  it('preflights proposed item changes, displaying stock comparison without writing an order', async () => {
+    vi.mocked(axios.post).mockClear()
+    vi.mocked(axios.post).mockResolvedValueOnce({ data: {
+      changed:true, can_save_direct:false, requires_replan:true, no_writes:true,
+      old_items_gross:'39.98', new_items_gross:'79.96', gross_delta:'39.98', currency:'USD',
+      rows:[{ order_item_id:10, operation:'update',
+        before:{ sku:'SKU-001', quantity:2 }, after:{ sku:'SKU-001', quantity:4 } }],
+      issues:['当前分仓需要重建'],
+      stock_by_warehouse:[{ warehouse_id:1, warehouse_name:'美西 MorePlus 仓',
+        single_warehouse_candidate:false, details:[] }],
+      inventory_note:'只读库存快照',
+    }})
+    const wrapper = mount(Show, { props:{ order:baseOrder, audit, canEditOrder:true } })
+    await wrapper.findAll('button').find(b => b.text() === '编辑订单')!.trigger('click')
+    const qty = wrapper.get('.ord-item-row input[type="number"][min="1"]')
+    await qty.setValue('4')
+    const check = wrapper.findAll('button').find(b => b.text().includes('检查 SKU、库存与分仓影响'))
+    await check!.trigger('click')
+    await flushPromises()
+    expect(axios.post).toHaveBeenCalledWith('/customers/orders/1/items/preview', expect.objectContaining({
+      items:[expect.objectContaining({ id:10, quantity:4 })],
+    }))
+    expect(wrapper.get('.ord-amendment-preview').text()).toContain('当前分仓需要重建')
+    expect(wrapper.get('.ord-amendment-preview').text()).toContain('39.98')
+    expect(wrapper.get('.ord-amendment-preview').text()).toContain('美西 MorePlus 仓')
+    expect(globalFeedback.value.state).toBe('BLOCKED')
+    expect(wrapper.find('.ord-item-row').exists()).toBe(true)
   })
 
   it('does not show the order edit entry to a user without orders.edit', () => {
