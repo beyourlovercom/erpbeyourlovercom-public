@@ -128,6 +128,7 @@ const props = withDefaults(defineProps<{
   allocationUi?: AllocationUi
   audit: { action: string; actor_id: number | null; created_at: string; reason?: string }[]
   canMarkOperational?: boolean
+  canEditOrder?: boolean
   canManageProductPackaging?: boolean
   canViewPackagingEvidence?: boolean
   canCreateProcurement?: boolean
@@ -135,7 +136,7 @@ const props = withDefaults(defineProps<{
   canOperateLogistics?: boolean
   canViewProfit?: boolean
 
-}>(), { canMarkOperational: false, canManageProductPackaging: false, canViewPackagingEvidence: false, canCreateProcurement: false, canCreateReplacement: false, canOperateLogistics: false, canViewProfit: false })
+}>(), { canMarkOperational: false, canEditOrder: false, canManageProductPackaging: false, canViewPackagingEvidence: false, canCreateProcurement: false, canCreateReplacement: false, canOperateLogistics: false, canViewProfit: false })
 
 
 const carrierOption = (name:string) => (props.carrierOptions ?? []).find(row => row.value === name)
@@ -500,7 +501,7 @@ const submitReplacement = () => {
             <a v-if="canViewProfit && !isKol" :href="`/accounting/order-costs?search=${encodeURIComponent(order.erp_order_id ?? '')}`" class="erp-btn erp-btn-secondary">查看订单利润</a>
             <a v-if="canCreateProcurement && !order.procurement_order" :href="`/purchase/orders/from-order/${order.id}/create`" class="erp-btn erp-btn-primary">创建采购订单</a>
             <a v-if="order.procurement_order" :href="`/purchase/orders/${order.procurement_order.id}`" class="erp-btn erp-btn-secondary">查看采购订单 · {{ order.procurement_order.procurement_number }}</a>
-            <button v-if="!editMode" type="button" class="erp-btn erp-btn-primary" @click="enterEditMode">编辑订单</button>
+            <button v-if="!editMode && canEditOrder" type="button" class="erp-btn erp-btn-primary" @click="enterEditMode">编辑订单</button>
             <button v-else type="button" class="erp-btn erp-btn-primary" :disabled="form.processing" @click="submit">保存订单</button>
           </div>
         </div>
