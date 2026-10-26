@@ -115,10 +115,13 @@ final class OrderItemMultiWarehouseReplanService
                     409, '订单商品、子履约或库存预留发生变化，请重新预检。');
                 abort_unless($locked->order_status?->value === 'pending_shipment'
                     && $locked->fulfillment_parent_id === null
-                    && in_array($locked->source_type, [OrderSourceType::Manual, OrderSourceType::ManualOther], true)
-                    && ! $locked->externalReferences()->where('provider', 'woocommerce')->exists(),
+                    && (in_array($locked->source_type, [OrderSourceType::Manual, OrderSourceType::ManualOther, OrderSourceType::WooCommerce], true)
+                        || $locked->externalReferences()->where('provider', 'woocommerce')->exists()),
                     409, '此类订单需要先完成外部商城或履约状态审核。');
-                abort_if($locked->financials()->exists() || $locked->costEntries()->exists()
+                abort_if(($locked->financials()->exists()
+                    && ! ($locked->source_type === OrderSourceType::WooCommerce
+                        || $locked->externalReferences()->where('provider', 'woocommerce')->exists()))
+                    || $locked->costEntries()->exists()
                     || $locked->procurementOrder()->exists() || $locked->shipmentAttempts()->exists()
                     || $locked->manualSync()->exists(),
                     409, '订单已经有财务、采购或真实物流记录，不能直接重规划。');
@@ -175,7 +178,7 @@ final class OrderItemMultiWarehouseReplanService
 
                 // The parent item identity is preserved; rebuilt pending derived
                 // rows get new IDs only after all old reserved inventory is freed.
-                $saved = $this->orders->amendItemsWithinAtomicReplan($locked, $items, $actor);
+                $saved = $this->orders->amendItemsWithinAtomicReplan($locked, $items, $actor, $reason);
                 $existingIds = collect($items)->pluck('id')->filter()->map(fn ($id) => (int) $id)->all();
                 $createdIds = $saved->items()->whereNotIn('id', $existingIds)->orderBy('id')->pluck('id')->all();
                 $newCursor = 0;

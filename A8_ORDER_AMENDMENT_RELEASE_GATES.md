@@ -86,3 +86,14 @@
 - 代码实现、MySQL 事务及双进程并发验证可作为开发完成证据；该分支可停止继续新增功能及 UI 美化。
 - **不可标记生产 RELEASED / Issue CLOSED**：桌面浏览器 UAT、员工实际操作签收、Owner 明确发布批准、生产发布前只读快照和发布后回读尚未完成。
 - 下一执行方先解决 Dev 登录持久化/桌面 UAT，再提交独立审批；生产上线另设发布窗口。不得为本开发窗口关闭而提前 merge 或修改正式库存。
+
+## R9–R12 V1 最新业务冻结（2026-10-26，Owner 确认）
+
+- V1 是客户与运营协商后的实际履约变更。Woo 原始交易、支付、退款和原销售数据不修改，也不需要回写网站 SKU；V2 Woo 双向修改已取消，不纳入本线范围。
+- Woo 来源商品行变更前记录 original_sale_items 快照；变更后 SKU/数量及赠品记录在 latest_fulfillment_items。原 woocommerce_line_item_id 和已确认 line_revenue 保留；新增赠品必须 0 元。
+- Woo 自动重复入站刷新财务、地址、来源游标，但人工履约变更后不再删除重建 ERP 订单商品行；最新网站商品数据单独保留供对照。
+- 没有 ERP 履约修改的 Woo 订单仍按原有入站方式更新。
+- Woo 支付门继续要求可验证的已付款证据，未付款、退款及争议订单不得绕过；实际成本入账与已发货订单仍不得改写。
+- 数据库迁移新增 order_fulfillment_amendments 审计与原单快照表。上线前必须核对生产数据库迁移状态和回滚。
+- 最小发布验收：Woo 订单预检 → 换 SKU/换色/赠品 → 仓库重规划 → ERP 按升级 SKU 履约，Woo 原单不变 → Woo 再入站不覆盖 → 原销售金额与付款证据不变 → 出错全量回滚。
+- R9 回归：Woo 原单与入站 3 PASS / 18 assertions；综合专项 66 PASS / 346 assertions；Orders/Show Vue 57 PASS，TypeScript 与 Vite PASS。

@@ -147,6 +147,17 @@ final class OrderService
             }
 
             $order->address()->updateOrCreate(['order_id' => $order->getKey()], $data->address);
+            $localFulfillmentAmendment = ! $created
+                && DB::table('order_fulfillment_amendments')->where('order_id', $order->getKey())->exists();
+            if ($localFulfillmentAmendment) {
+                // Website remains the source of sale/payment truth; ERP remains the
+                // authority for a customer-agreed physical fulfillment upgrade.
+                // Do not delete/recreate parent item IDs or overwrite changed SKUs.
+                DB::table('order_fulfillment_amendments')->where('order_id', $order->getKey())->update([
+                    'latest_woo_inbound_items' => json_encode($data->items, JSON_THROW_ON_ERROR),
+                    'updated_at' => now(),
+                ]);
+            } else {
             $order->items()->delete();
             $wooReference = $data->provider.':'.$data->reference;
             foreach ($data->items as $item) {
@@ -160,6 +171,7 @@ final class OrderService
                     'unit_price' => (string) $item['unit_price'],
                     'line_revenue' => $this->lineRevenue((string) $item['unit_price'], (int) $item['quantity']),
                 ]);
+            }
             }
             $reference->forceFill(['provider_modified_at' => $data->providerModifiedAt])->save();
             if ($data->settlementEvidence !== null) {
@@ -210,12 +222,14 @@ final class OrderService
             $before['items'] = $lockedOrder->items()->get()->toArray();
             $address = array_intersect_key($attributes, array_flip(self::ADDRESS_FIELDS));
             $orderAttributes = array_diff_key($attributes, $address);
+            $amendmentReason = trim((string) ($orderAttributes['amendment_reason'] ?? ''));
+            unset($orderAttributes['amendment_reason']);
             $lockedOrder->fill($orderAttributes)->save();
             if ($address !== []) {
                 $lockedOrder->address()->updateOrCreate(['order_id' => $lockedOrder->getKey()], $address);
             }
             if ($items !== null) {
-                $this->reconcileOrderItems($lockedOrder, $items);
+                $this->reconcileOrderItems($lockedOrder, $items, false, $amendmentReason, $actor);
             }
             $after = $this->auditData($lockedOrder);
             $after['address'] = $lockedOrder->address?->fresh()?->toArray();
@@ -233,12 +247,12 @@ final class OrderService
      *
      * @param list<array<string,mixed>> $items
      */
-    public function amendItemsWithinAtomicReplan(Order $order, array $items, Authenticatable $actor): Order
+    public function amendItemsWithinAtomicReplan(Order $order, array $items, Authenticatable $actor, string $reason): Order
     {
-        return DB::transaction(function () use ($order, $items, $actor): Order {
+        return DB::transaction(function () use ($order, $items, $actor, $reason): Order {
             $locked = Order::query()->whereKey($order->getKey())->lockForUpdate()->firstOrFail();
             $before = ['items' => $locked->items()->get()->toArray()];
-            $this->reconcileOrderItems($locked, $items, true);
+            $this->reconcileOrderItems($locked, $items, true, $reason, $actor);
             $this->record($actor, 'order.items.atomic_replan', $locked,
                 before: $before, after: ['items' => $locked->items()->get()->toArray()],
                 reason: 'approved_pending_fulfillment_replan');
@@ -253,12 +267,13 @@ final class OrderService
      *
      * @param list<array<string,mixed>> $submitted
      */
-    private function reconcileOrderItems(Model $order, array $submitted, bool $atomicReplan = false): void
+    private function reconcileOrderItems(Model $order, array $submitted, bool $atomicReplan = false, string $reason = '', ?Authenticatable $actor = null): void
     {
         $existing = $order->items()->lockForUpdate()->orderBy('id')->get();
         $existingById = $existing->keyBy('id');
         $seen = [];
         $planned = [];
+        $wooFulfillmentOnly = $this->isWooLinked($order);
 
         foreach ($submitted as $index => $item) {
             $id = isset($item['id']) && $item['id'] !== '' ? (int) $item['id'] : null;
@@ -285,6 +300,19 @@ final class OrderService
                 'line_revenue' => $this->lineRevenue($item['unit_price'], (int) $item['quantity']),
             ];
             $row = $id !== null ? $existingById->get($id) : null;
+            if ($wooFulfillmentOnly) {
+                // The customer's Woo payment and negotiated sale price are
+                // immutable. New products are complimentary or require a
+                // separate audited payment process, not an ERP line-price edit.
+                if (($row && abs((float) $row->unit_price - (float) $fields['unit_price']) > 0.001)
+                    || (! $row && (float) $fields['unit_price'] !== 0.0)) {
+                    throw ValidationException::withMessages([
+                        "items.{$index}.unit_price" => '协商升级只调整发货商品，Woo 原始付款单价不可修改；新增赠品金额须为 0。',
+                    ]);
+                }
+                // Preserve recorded sale revenue regardless of shipment quantity.
+                $fields['line_revenue'] = $row ? $row->line_revenue : '0.00';
+            }
             $changed = $row === null
                 || (int) $row->product_id !== $fields['product_id']
                 || (string) $row->sku !== (string) $fields['sku']
@@ -318,18 +346,27 @@ final class OrderService
                 'items' => '该订单已分仓、预留库存或进入物流。不能直接覆盖商品，请使用受控订单变更与重新分仓流程。',
             ]);
         }
-        // Woo-linked order items must retain external source identity. A
-        // separate Woo reconciliation contract is required before amending.
-        if (! in_array($order->source_type, [OrderSourceType::Manual, OrderSourceType::ManualOther], true)
-            || $order->externalReferences()->where('provider', 'woocommerce')->exists()) {
-            throw ValidationException::withMessages([
-                'items' => '此订单关联外部商城。商品变更必须先完成官网/ERP 双向同步契约，当前不可直接改写。',
-            ]);
+        if (! $wooFulfillmentOnly && ! in_array($order->source_type, [OrderSourceType::Manual, OrderSourceType::ManualOther], true)) {
+            throw ValidationException::withMessages(['items' => '此类外部来源订单暂不能修改发货商品。']);
         }
-        if ($order->financials()->exists() || $order->costEntries()->exists()) {
-            throw ValidationException::withMessages([
-                'items' => '订单已有付款、退款或成本入账证据。请先完成财务差额与补退款审核，不能直接改写商品金额。',
-            ]);
+        if ($order->costEntries()->exists() || (! $wooFulfillmentOnly && $order->financials()->exists())) {
+            throw ValidationException::withMessages(['items' => '已有物流成本或财务结算，不能直接改写商品。']);
+        }
+        if ($wooFulfillmentOnly && (mb_strlen($reason) < 4 || mb_strlen($reason) > 500)) {
+            throw ValidationException::withMessages(['amendment_reason' => '请记录 4–500 字的客户升级或换货协商原因。']);
+        }
+        if ($wooFulfillmentOnly) {
+            $originalSnapshot = $existing->toArray();
+            $prior = DB::table('order_fulfillment_amendments')->where('order_id', $order->getKey())->first();
+            if (! $prior) {
+                DB::table('order_fulfillment_amendments')->insert([
+                    'order_id' => $order->getKey(),
+                    'original_sale_items' => json_encode($originalSnapshot, JSON_THROW_ON_ERROR),
+                    'latest_fulfillment_items' => json_encode($originalSnapshot, JSON_THROW_ON_ERROR),
+                    'reason' => $reason, 'actor_id' => $actor?->getAuthIdentifier(),
+                    'revision' => 1, 'created_at' => now(), 'updated_at' => now(),
+                ]);
+            }
         }
 
         foreach ($planned as $change) {
@@ -341,6 +378,15 @@ final class OrderService
             }
         }
         foreach ($removed as $row) $row->delete();
+        if ($wooFulfillmentOnly) {
+            DB::table('order_fulfillment_amendments')->where('order_id', $order->getKey())->update([
+                'latest_fulfillment_items' => json_encode($order->items()->orderBy('id')->get()->toArray(), JSON_THROW_ON_ERROR),
+                'reason' => $reason,
+                'actor_id' => $actor?->getAuthIdentifier(),
+                'revision' => DB::raw('revision + 1'),
+                'updated_at' => now(),
+            ]);
+        }
 
         // An earlier, not-reserved warehouse choice must be explicitly
         // reconfirmed against the new SKU/quantity/stock. No shipment sent.
@@ -354,6 +400,12 @@ final class OrderService
                 'carrier_selection_source' => null,
             ])->save();
         }
+    }
+
+    private function isWooLinked(Model $order): bool
+    {
+        return $order->source_type === OrderSourceType::WooCommerce
+            || $order->externalReferences()->where('provider', 'woocommerce')->exists();
     }
 
     public function setOperationalMarker(Model $order, string $marker, bool $active, ?Authenticatable $actor): Model

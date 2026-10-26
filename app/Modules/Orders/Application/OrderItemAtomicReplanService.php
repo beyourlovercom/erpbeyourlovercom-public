@@ -97,10 +97,13 @@ final class OrderItemAtomicReplanService
                     409, '商品、分仓或预留库存已变化，请重新预检后再提交。');
                 abort_unless($locked->order_status?->value === 'pending_shipment'
                     && $locked->fulfillment_parent_id === null
-                    && in_array($locked->source_type, [OrderSourceType::Manual, OrderSourceType::ManualOther], true)
-                    && ! $locked->externalReferences()->where('provider', 'woocommerce')->exists(),
+                    && (in_array($locked->source_type, [OrderSourceType::Manual, OrderSourceType::ManualOther, OrderSourceType::WooCommerce], true)
+                        || $locked->externalReferences()->where('provider', 'woocommerce')->exists()),
                     409, '当前原始订单可能关联外部商店，需先完成 Woo/ERP 商品一致性审核。');
-                abort_if($locked->financials()->exists() || $locked->costEntries()->exists(),
+                abort_if(($locked->financials()->exists()
+                    && ! ($locked->source_type === OrderSourceType::WooCommerce
+                        || $locked->externalReferences()->where('provider', 'woocommerce')->exists()))
+                    || $locked->costEntries()->exists(),
                     409, '订单已有财务成本或结算记录，需先完成财务调整契约，不能直接改写商品。');
                 abort_if($locked->fulfillmentChildren()->exists(),
                     409, '订单已有拆分履约；必须使用多仓专用事务，不能按单仓直接改写。');
@@ -126,7 +129,7 @@ final class OrderItemAtomicReplanService
                 $oldReservation = $held->first();
                 $this->reservations->release((int) $oldReservation->id, $actor, 'order_item_atomic_replan');
 
-                $saved = $this->orders->amendItemsWithinAtomicReplan($locked, $items, $actor);
+                $saved = $this->orders->amendItemsWithinAtomicReplan($locked, $items, $actor, $reason);
                 $existingIds = collect($items)->pluck('id')->filter()->map(fn ($id) => (int) $id)->all();
                 $createdIds = $saved->items()->whereNotIn('id', $existingIds)->orderBy('id')->pluck('id')->all();
                 $newCursor = 0;

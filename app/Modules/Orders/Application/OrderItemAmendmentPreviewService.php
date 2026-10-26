@@ -114,10 +114,22 @@ final class OrderItemAmendmentPreviewService
         $hasActiveReservation = $reservations->isNotEmpty();
         $issues = [];
         if ($actuallyStarted) $issues[] = '订单或部分履约已进入实际物流，不能修改已发货商品，请使用补发或售后流程。';
-        $externalOrder = ! in_array($order->source_type, [OrderSourceType::Manual, OrderSourceType::ManualOther], true)
+        $wooFulfillmentOnly = $order->source_type === OrderSourceType::WooCommerce
             || $order->externalReferences()->where('provider', 'woocommerce')->exists();
-        $financialized = $order->financials()->exists() || $order->costEntries()->exists();
-        if ($externalOrder) $issues[] = '外部商城来源商品变更需先建立官网与 ERP 一致性契约。';
+        $externalOrder = ! $wooFulfillmentOnly
+            && ! in_array($order->source_type, [OrderSourceType::Manual, OrderSourceType::ManualOther], true);
+        $financialized = $order->costEntries()->exists()
+            || (! $wooFulfillmentOnly && $order->financials()->exists());
+        if ($externalOrder) $issues[] = '当前外部来源不支持 ERP 履约单独变更。';
+        if ($wooFulfillmentOnly) {
+            foreach ($proposed as $i => $candidate) {
+                $original = isset($candidate['id']) ? $existing->get((int) $candidate['id']) : null;
+                if (($original && abs((float) $original->unit_price - (float) $candidate['unit_price']) > 0.001)
+                    || (! $original && (float) $candidate['unit_price'] !== 0.0)) {
+                    $issues[] = "商品行 ".($i + 1)." 不能修改原交易价格；新赠品必须为 0 元。";
+                }
+            }
+        }
         if ($financialized) $issues[] = '订单已有财务成本或结算记录，需先完成财务调整契约。';
         if ($order->fulfillment_parent_id !== null) $issues[] = '衍生履约订单不能直接修改商品，请操作原订单。';
         if ($order->procurementOrder()->exists()) $issues[] = '订单已关联采购单，需先处理采购影响。';
@@ -218,14 +230,15 @@ final class OrderItemAmendmentPreviewService
             'changed' => $changed,
             'rows' => $rows,
             'required_by_product' => $required,
-            'old_items_gross' => number_format($oldGross, 2, '.', ''),
-            'new_items_gross' => number_format($newGross, 2, '.', ''),
-            'gross_delta' => number_format($newGross - $oldGross, 2, '.', ''),
+            'old_items_gross' => number_format($wooFulfillmentOnly ? $order->items->sum('line_revenue') : $oldGross, 2, '.', ''),
+            'new_items_gross' => number_format($wooFulfillmentOnly ? $order->items->sum('line_revenue') : $newGross, 2, '.', ''),
+            'gross_delta' => number_format($wooFulfillmentOnly ? 0 : $newGross - $oldGross, 2, '.', ''),
             'currency' => (string) ($order->currency ?: 'USD'),
             'active_reservations' => $reservations->map(fn ($r) => [
                 'id' => (int) $r->id, 'warehouse_id' => (int) $r->warehouse_id, 'status' => $r->status,
             ])->values()->all(),
             'requires_replan' => $linked || $hasActiveReservation,
+            'fulfillment_only' => $wooFulfillmentOnly,
             'can_atomic_single_replan' => $singleAtomicEligible,
             'can_atomic_multi_replan' => $multiEligible,
             'can_save_direct' => ! $changed || $issues === [],

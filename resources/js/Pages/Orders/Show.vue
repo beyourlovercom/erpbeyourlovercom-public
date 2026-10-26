@@ -180,6 +180,7 @@ type EditItem = {
 const makeFormData = () => ({
   order_date: props.order.order_date ?? '',
   order_note: props.order.order_note ?? '',
+  amendment_reason: '',
   currency: props.order.currency ?? 'USD',
   recipient_name: props.order.address?.recipient_name ?? '',
   phone: props.order.address?.phone ?? '',
@@ -209,7 +210,7 @@ const currencyOptions = computed(() => {
 })
 
 type AmendmentPreview = {
-  changed:boolean; can_save_direct:boolean; requires_replan:boolean; can_atomic_single_replan:boolean; can_atomic_multi_replan:boolean; expected_revision:string; no_writes:boolean;
+  changed:boolean; fulfillment_only?:boolean; can_save_direct:boolean; requires_replan:boolean; can_atomic_single_replan:boolean; can_atomic_multi_replan:boolean; expected_revision:string; no_writes:boolean;
   old_items_gross:string; new_items_gross:string; gross_delta:string; currency:string;
   rows:{order_item_id:number|null; operation:string; before:{sku:string|null;quantity:number}|null; after:{sku:string;quantity:number}|null}[];
   issues:string[];
@@ -1063,7 +1064,8 @@ const submitReplacement = () => {
           </template>
           <!-- Edit mode: stable item IDs, SKU variant selection and explicit add/remove. -->
           <template v-else>
-            <p class="ord-item-amendment-info">SKU、颜色或数量变化后，必须重新核对库存与分仓。已分仓、预留库存或开始发货的订单暂不允许直接修改商品。</p>
+            <p class="ord-item-amendment-info">修改的是 ERP 实际发货方案。已经发货的商品不能覆盖历史；已预留的库存必须经过原子重规划。</p>
+            <p v-if="order.source_type === 'woocommerce'" class="ord-item-amendment-info">Woo 原订单付款及商品交易记录保持不变；仅 ERP 的 SKU、数量、颜色、赠品和发货仓库发生变化。</p>
             <p v-if="(form.errors as Record<string,string>).items" class="erp-field-error" role="alert">{{ (form.errors as Record<string,string>).items }}</p>
             <div v-for="(item, index) in form.items" :key="item.id ?? `new-${index}`" class="ord-item-row">
               <div class="ord-item-sku">
@@ -1087,12 +1089,19 @@ const submitReplacement = () => {
               </div>
               <div class="erp-form-field">
                 <label class="erp-form-label">单价（{{ form.currency }}）</label>
-                <input v-model="item.unit_price" type="number" min="0" step="0.01" class="erp-input" required>
+                <input v-model="item.unit_price" type="number" min="0" step="0.01" class="erp-input" required
+                  :readonly="order.source_type === 'woocommerce' && item.id !== null">
+                <p v-if="order.source_type === 'woocommerce' && item.id === null" class="ord-item-gift-hint">新赠品必须保持 0 元，不改变官网付款金额。</p>
               </div>
               <button type="button" class="erp-btn erp-btn-secondary" :disabled="form.items.length <= 1" @click="removeOrderItem(index)">删除商品</button>
             </div>
             <button type="button" class="erp-btn erp-btn-secondary ord-add-product" @click="addOrderItem">+ 增加商品 / 赠品</button>
-            <p class="ord-item-gift-hint">赠品选择真实 SKU，数量需大于 0，单价可填 0.00。修改前请先确认客户同意。</p>
+            <p class="ord-item-gift-hint">赠品使用真实 SKU，数量需大于 0；Woo 来源订单新增赠品价格固定为 0。</p>
+            <label v-if="order.source_type === 'woocommerce'" class="erp-form-label">
+              客户协商后的履约修改原因
+              <textarea v-model="form.amendment_reason" class="erp-textarea" rows="2" placeholder="填写客户同意升级产品或赠品的具体依据"/>
+              <p v-if="form.errors.amendment_reason" class="erp-field-error">{{ form.errors.amendment_reason }}</p>
+            </label>
             <div class="ord-amendment-actions">
               <button type="button" class="erp-btn erp-btn-secondary" :disabled="amendmentPreviewLoading" @click="previewItemAmendment">
                 {{ amendmentPreviewLoading ? '正在核对…' : '检查 SKU、库存与分仓影响' }}
@@ -1102,6 +1111,7 @@ const submitReplacement = () => {
             <p v-if="amendmentPreviewError" class="erp-field-error" role="alert">{{ amendmentPreviewError }}</p>
             <section v-if="amendmentPreview" class="ord-amendment-preview" aria-label="订单商品变更预检结果">
               <strong>{{ amendmentPreview.can_save_direct ? '预检：可保存商品变更' : '预检：暂不能直接保存商品变更' }}</strong>
+              <p v-if="amendmentPreview.fulfillment_only">仅调整 ERP 实际发货，不修改官网订单、客户付款、退款或原销售收入。</p>
               <p>商品金额（{{ amendmentPreview.currency }}）：{{ amendmentPreview.old_items_gross }} → {{ amendmentPreview.new_items_gross }}（差额 {{ amendmentPreview.gross_delta }}）。不代表最终应收/退款金额。</p>
               <p v-for="(issue,i) in amendmentPreview.issues" :key="i" class="erp-field-error" role="alert">{{ issue }}</p>
               <div v-for="(row,i) in amendmentPreview.rows.filter(row => row.operation !== 'unchanged')" :key="i" class="ord-amendment-diff">

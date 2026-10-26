@@ -620,6 +620,7 @@ final class OrderController
             'source_type' => ['sometimes', Rule::in(array_column(OrderSourceType::cases(), 'value'))],
             'order_date' => ['sometimes', 'date'],
             'order_note' => ['sometimes', 'nullable', 'string', 'max:5000'],
+            'amendment_reason' => ['sometimes', 'nullable', 'string', 'max:500'],
             'currency' => ['sometimes', 'required', 'string', 'regex:/^[A-Z]{3}$/'],
             'recipient_name' => ['sometimes', 'nullable', 'string', 'max:255'], 'phone' => ['sometimes', 'nullable', 'string', 'max:64'],
             'country' => ['sometimes', 'nullable', 'string', 'max:128'], 'province_state' => ['sometimes', 'nullable', 'string', 'max:128'],

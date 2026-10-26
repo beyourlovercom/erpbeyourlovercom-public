@@ -375,7 +375,7 @@ final class ProductOrderIntegrationTest extends TestCase
         ]);
     }
 
-    public function test_manual_order_with_woocommerce_reference_cannot_bypass_external_guard(): void
+    public function test_manual_order_with_woocommerce_reference_supports_local_only_fulfillment_change_with_reason(): void
     {
         $user = $this->userWith(['orders.view', 'orders.create', 'orders.edit']);
         $original = Product::create(['woocommerce_product_id' => 9413, 'sku' => 'WLINK-A', 'name' => 'A', 'product_type' => 'simple']);
@@ -392,9 +392,18 @@ final class ProductOrderIntegrationTest extends TestCase
         $this->actingAs($user)->patch("/customers/orders/{$order->id}", [
             'items' => [['id' => $line->id, 'product_id' => $replacement->id,
                 'quantity' => 2, 'unit_price' => '79.00']],
-        ])->assertSessionHasErrors('items');
+        ])->assertSessionHasErrors('amendment_reason');
+        $this->actingAs($user)->patch("/customers/orders/{$order->id}", [
+            'amendment_reason' => 'Customer agreed to upgraded blue SKU',
+            'items' => [['id' => $line->id, 'product_id' => $replacement->id,
+                'quantity' => 2, 'unit_price' => '79.00']],
+        ])->assertRedirect();
         $this->assertDatabaseHas('order_items', [
-            'id' => $line->id, 'product_id' => $original->id, 'quantity' => 1,
+            'id' => $line->id, 'product_id' => $replacement->id,
+            'sku' => 'WLINK-B', 'quantity' => 2, 'line_revenue' => '79.00',
+        ]);
+        $this->assertDatabaseHas('order_fulfillment_amendments', [
+            'order_id' => $order->id, 'reason' => 'Customer agreed to upgraded blue SKU',
         ]);
     }
 
