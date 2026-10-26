@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils'
+import { reactive } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
 import Show from './Show.vue'
 import { router } from '@inertiajs/vue3'
@@ -8,14 +9,14 @@ vi.mock('@inertiajs/vue3', () => ({
   router: { post: vi.fn() },
   useForm: (initial: Record<string, unknown>) => {
     const data = { ...initial }
-    return {
+    return reactive({
       ...data,
       processing: false,
       errors: {},
       patch: vi.fn(),
       reset: vi.fn(),
       clearErrors: vi.fn(),
-    }
+    })
   },
   usePage: () => ({ url: '/customers/orders/1', props: { auth: { user: { id: 1, name: 'Test', email: 't@t.com' } }, shellNavigation: [] } }),
 }))
