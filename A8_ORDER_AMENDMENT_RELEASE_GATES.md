@@ -37,8 +37,8 @@
 - [x] 与正式站完全隔离的 US Mac mini UAT worktree，使用 **内存 SQLite**、无生产 .env、无真实 Woo 发货。
 - [x] 本地订单商品及部分履约专项回归通过（25 tests, 108 assertions；无 warning）。
 - [x] 全量 PHP 基线和差异分析归档：同一 US Mac mini、相同 vendor/构建、独立内存 SQLite；`main d7df4e16`：1831 passed / 46 failed / 6 skipped / 16839 assertions；`PR #16 1bfe4c8d`：1866 passed / 46 failed / 6 skipped / 17022 assertions。失败项目清单相同，没有新增失败；**46 项旧失败仍保持 OPEN，不算 full-suite PASS**。
-- [ ] MySQL Dev 数据库的并发库存锁/事务回滚测试（SQLite 成功不等于生产 MySQL 并发证明）。
-- [ ] 使用真实员工权限的 Dev Desktop UAT：修改颜色、增加赠品、改数量、单仓/多仓仓库选择、库存不足回滚、已发货拒绝、Woo/财务拒绝。
+- [x] 独立 MySQL 8.4 数据库迁移、事务/回滚专项及双进程竞态验证：49 个核心 PHP 测试 / 229 条断言 PASS，额外时区指纹回归 1 / 2 PASS；单仓及多仓真实独立进程均为「一次提交成功 + 一次 409 拒绝」，旧预留释放且新库存仅预留一次。仅证明本地隔离 MySQL，非正式 ERP 数据库。
+- [ ] Dev Desktop **浏览器操作** UAT 尚未通过：已在本地隔离 MySQL 创建受权限限制的测试员工并启动本地登录页，页面可打开，但 Playwright 登录后会话未稳定跳转，未完成实际浏览器点击完整业务提交。PHP HTTP 权限/成功/拒绝接口测试 PASS（不等同于浏览器 UAT）；不得标记该项通过。
 - [ ] CI 精确 HEAD 冻结；Dev 生产同版本差异检查、零迁移或明确迁移。
 - [ ] Owner 明确授权发布、灰度单仓，再多仓，最后生产读回确认。
 - [ ] 生产切换前只读快照、应用发布切换与独立数据库状态恢复预案。
@@ -69,3 +69,20 @@
 - GitHub Functional [PASS](https://github.com/beyourlovercom/erpbeyourlovercom-public/actions/runs/40303634972)，Source [PASS](https://github.com/beyourlovercom/erpbeyourlovercom-public/actions/runs/40303635001)。
 - 需要单独记录的历史失败：日志中 Woo 产品编号约束、物流手工预留 409、部分菜单/架构冻结契约等；任何此类失败不得被“修改断言凑绿”掩盖。
 - 放行判断：此证据支持 **功能候选进入 Dev 人工 UAT**，不代表生产 MySQL 并发、真实权限或 Owner 审批已经通过。
+
+## A8 MySQL 时区与并发修复闭环（2026-10-26）
+
+- 原发现：相同 MySQL `TIMESTAMP` 列在不同 PHP/MySQL session timezone 下产生不同时间字符串，单仓双员工并发请求会同时遭遇虚假的 409。与订单库存是否真正变化无关。
+- 修复：`OrderAmendmentRevision` 对 orders、order_items、shipments、fulfillment_allocations、inventory_reservations 的时间版本在 MySQL 中用批量 `UNIX_TIMESTAMP()` 读取数据库 UTC 时刻；SQLite 使用原始 DB 值。含 children item、已发货时刻，维护单一稳定 SHA-256 指纹。
+- 回归：`OrderAmendmentRevisionTimezoneTest` 在同一 MySQL 会话变换 +00:00/+07:00 后 hash 一致，SKU/数量改变后 hash 改变；GitHub SQLite CI 也验证跨读取与实际变更差异。
+- 隔离数据库：`erp_a8_pr16_isolated_20261026`（US Mac mini 本机 MySQL 8.4，不含任何真实 ERP 数据；147 张迁移表；测试脚本仅限此 DB）。
+- 多进程单仓竞争：2 个独立 PHP worker 同时通过预检并在同一订单行锁等待，最终一个原子提交成功、另一个 409，旧 reserved 释放，1 笔新 reserved，SKU 数量 3，无重复扣减/预留。
+- 多进程多仓竞争：同样一个成功、一个 409；2 笔旧 reserved 全部 released，2 笔新 reserved，有效新 SKU 预留为 3，旧 SKU 可用库存恢复。
+- 事务 MySQL 专项：49/49 PASS，229 assertions；跨时区新回归 MySQL 1/1 PASS、2 assertions。隔离桌面页面构建 PASS，但登录会话在本轮浏览器流程未稳定，仍为 UAT 放行项。
+- 当前 GitHub 代码已含时区修复与自动化测试，后续发布必须取最新 exact HEAD，**不能使用 2026-10-26 较早的 `dabc7479` 或 `1bfe4c8d` 候选。**
+
+## 本窗口开发支线移交边界
+
+- 代码实现、MySQL 事务及双进程并发验证可作为开发完成证据；该分支可停止继续新增功能及 UI 美化。
+- **不可标记生产 RELEASED / Issue CLOSED**：桌面浏览器 UAT、员工实际操作签收、Owner 明确发布批准、生产发布前只读快照和发布后回读尚未完成。
+- 下一执行方先解决 Dev 登录持久化/桌面 UAT，再提交独立审批；生产上线另设发布窗口。不得为本开发窗口关闭而提前 merge 或修改正式库存。
