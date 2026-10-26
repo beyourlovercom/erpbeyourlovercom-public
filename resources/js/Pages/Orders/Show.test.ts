@@ -12,7 +12,7 @@ vi.mock('axios', () => ({
 
 vi.mock('@inertiajs/vue3', () => ({
   Head: { props: ['title'], template: '<title>{{ title }}</title>' },
-  router: { post: vi.fn() },
+  router: { post: vi.fn(), reload: vi.fn() },
   useForm: (initial: Record<string, unknown>) => {
     const data = { ...initial }
     return reactive({
@@ -397,6 +397,50 @@ describe('Orders/Show V2', () => {
     expect(wrapper.get('.ord-amendment-preview').text()).toContain('美西 MorePlus 仓')
     expect(globalFeedback.value.state).toBe('BLOCKED')
     expect(wrapper.find('.ord-item-row').exists()).toBe(true)
+  })
+
+  it('requires explicit approval and expected revision for single-warehouse atomic replan', async () => {
+    vi.mocked(axios.post).mockClear()
+    vi.mocked(router.reload).mockClear()
+    vi.mocked(axios.post)
+      .mockResolvedValueOnce({data:{
+        changed:true, can_save_direct:false, requires_replan:true, can_atomic_single_replan:true,
+        expected_revision:'a'.repeat(64), no_writes:true, old_items_gross:'39.98',
+        new_items_gross:'59.97', gross_delta:'19.99', currency:'USD',
+        rows:[{ order_item_id:10, operation:'update',
+          before:{sku:'SKU-001',quantity:2}, after:{sku:'SKU-001',quantity:3} }],
+        issues:['库存需要重规划'],
+        stock_by_warehouse:[{warehouse_id:1,warehouse_code:'US-LA',
+          warehouse_name:'美西 MorePlus 仓',single_warehouse_candidate:true,details:[]}],
+        inventory_note:'仅为库存快照',
+      }})
+      .mockResolvedValueOnce({data:{order_id:1,new_reservation_id:25,warehouse_id:1}})
+    const wrapper = mount(Show, { props:{
+      order:baseOrder, audit, canEditOrder:true, canOperateLogistics:true,
+    } })
+    await wrapper.findAll('button').find(b => b.text() === '编辑订单')!.trigger('click')
+    await wrapper.get('.ord-item-row input[type="number"][min="1"]').setValue('3')
+    await wrapper.findAll('button').find(b => b.text().includes('检查 SKU、库存与分仓影响'))!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.ord-replan-approval').text()).toContain('单仓库存原子重规划')
+    const confirm = wrapper.get('.ord-replan-approval button')
+    expect(confirm.attributes('disabled')).toBeDefined()
+    expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(1)
+    await wrapper.get('.ord-replan-approval select').setValue('US-LA')
+    await wrapper.get('.ord-replan-approval textarea').setValue('Customer approved blue color')
+    await wrapper.get('.ord-replan-approval input[type="checkbox"]').setValue(true)
+    await confirm.trigger('click')
+    await flushPromises()
+    expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(axios.post)).toHaveBeenLastCalledWith(
+      '/customers/orders/1/items/replan', expect.objectContaining({
+        expected_revision:'a'.repeat(64),
+        reason:'Customer approved blue color',
+        assignments:[{item_index:0,source_code:'US-LA'}],
+      }),
+    )
+    expect(globalFeedback.value.state).toBe('SUCCESS')
+    expect(router.reload).toHaveBeenCalledWith({preserveScroll:true})
   })
 
   it('does not show the order edit entry to a user without orders.edit', () => {
