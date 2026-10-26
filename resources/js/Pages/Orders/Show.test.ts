@@ -440,7 +440,7 @@ describe('Orders/Show V2', () => {
       }),
     )
     expect(globalFeedback.value.state).toBe('SUCCESS')
-    expect(router.reload).toHaveBeenCalledWith({preserveScroll:true})
+    expect(router.reload).toHaveBeenCalledWith()
   })
 
   it('does not show the order edit entry to a user without orders.edit', () => {
