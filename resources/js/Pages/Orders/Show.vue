@@ -259,7 +259,7 @@ const commitAtomicReplan = async () => {
     amendmentPreview.value = null
     amendmentReplanApproved.value = false
     editMode.value = false
-    router.reload({preserveScroll:true})
+    router.reload()
   } catch (error) {
     const payload = axios.isAxiosError(error)
       ? error.response?.data as {message?:string;errors?:Record<string,string[]>}|undefined : undefined
