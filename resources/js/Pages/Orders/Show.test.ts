@@ -210,6 +210,73 @@ describe('Orders/Show V2', () => {
     expect((selects[2].element as HTMLSelectElement).value).toBe('USPS Priority Mail')
   })
 
+  const shipmentUiProps = {
+    order: { ...baseOrder, shipment: { ...baseOrder.shipment, warehouse_id: 1, carrier: 'USPS', service: 'USPS Priority Mail' } },
+    audit, canOperateLogistics: true,
+    warehouses: [{ id: 1, slug: 'us-la', name: '美西 MorePlus 仓', code: 'US-LA', country_code: 'US' }],
+    carrierOptions: [{ value:'USPS', label:'USPS', default_service_id:101, default_service_value:'USPS Priority Mail',
+      services:[{ id:101, key:'priority_mail', value:'USPS Priority Mail', label:'Priority Mail', name_en:'Priority Mail', name_zh:'优先件' }] }],
+  }
+  const openShippingDialog = async () => {
+    const wrapper = mount(Show, { props:shipmentUiProps })
+    const button = wrapper.get('[data-testid="fulfillment-actions"]').findAll('button').find(b => b.text().includes('履约发货'))
+    await button!.trigger('click')
+    return wrapper
+  }
+
+  it('blocks Chinese tracking before POST with red field text and GlobalFeedbackIsland, preserving entered note', async () => {
+    vi.mocked(router.post).mockClear()
+    const wrapper = await openShippingDialog()
+    const tracking = wrapper.get('.ord-shipment-form input[placeholder="追踪号，可稍后补录"]')
+    const note = wrapper.get('.ord-shipment-note textarea')
+    await tracking.setValue('填写中文查看错误')
+    await note.setValue('这段中文属于物流备注')
+    const confirm = wrapper.findAll('.ord-replacement-actions button').find(b => b.text().includes('确认发货'))
+    await confirm!.trigger('click')
+    expect(router.post).not.toHaveBeenCalled()
+    expect(wrapper.find('.ord-shipment-modal').exists()).toBe(true)
+    expect(wrapper.get('.ord-shipment-field-error').text()).toContain('不能包含中文')
+    expect(tracking.attributes('aria-invalid')).toBe('true')
+    expect((note.element as HTMLTextAreaElement).value).toBe('这段中文属于物流备注')
+    expect(globalFeedback.value.state).toBe('BLOCKED')
+    expect(globalFeedback.value.message).toContain('不能包含中文')
+    await tracking.setValue('00340435069161712046')
+    expect(wrapper.find('.ord-shipment-field-error').exists()).toBe(false)
+  })
+
+  it('accepts valid Tracking with Chinese note and routes server validation back to the red field', async () => {
+    vi.mocked(router.post).mockClear()
+    const wrapper = await openShippingDialog()
+    const tracking = wrapper.get('.ord-shipment-form input[placeholder="追踪号，可稍后补录"]')
+    await tracking.setValue('00340435069161712046')
+    await wrapper.get('.ord-shipment-note textarea').setValue('中文备注允许')
+    const confirm = wrapper.findAll('.ord-replacement-actions button').find(b => b.text().includes('确认发货'))
+    await confirm!.trigger('click')
+    const calls = vi.mocked(router.post).mock.calls
+    expect(calls).toHaveLength(1)
+    expect(calls[0][0]).toBe('/logistics/orders/1/ship')
+    expect(calls[0][1]).toMatchObject({ tracking_number:'00340435069161712046', logistics_note:'中文备注允许' })
+    const options = calls[0][2] as { onError: (errors:Record<string,string>) => void }
+    options.onError({ tracking_number:'追踪号中存在无效字符，请检查。' })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('.ord-shipment-field-error').text()).toContain('无效字符')
+    expect(wrapper.find('.ord-shipment-modal').exists()).toBe(true)
+    expect((wrapper.get('.ord-shipment-form input[placeholder="追踪号，可稍后补录"]').element as HTMLInputElement).value).toBe('00340435069161712046')
+    expect(globalFeedback.value.message).toContain('无效字符')
+  })
+
+  it('blocks invalid Tracking when saving a draft without losing Chinese logistics note', async () => {
+    vi.mocked(router.post).mockClear()
+    const wrapper = await openShippingDialog()
+    await wrapper.get('.ord-shipment-form input[placeholder="追踪号，可稍后补录"]').setValue('含有中文')
+    await wrapper.get('.ord-shipment-note textarea').setValue('备注中文可保留')
+    const save = wrapper.findAll('.ord-replacement-actions button').find(b => b.text().includes('保存草稿'))
+    await save!.trigger('click')
+    expect(router.post).not.toHaveBeenCalled()
+    expect(wrapper.get('.ord-shipment-field-error').text()).toContain('中文')
+    expect((wrapper.get('.ord-shipment-note textarea').element as HTMLTextAreaElement).value).toBe('备注中文可保留')
+  })
+
   it('offers direct fulfillment execution on a pending single order', async () => {
     const wrapper = mount(Show, { props: {
       order: baseOrder,
