@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Head, router, useForm } from '@inertiajs/vue3'
 import { ref, computed } from 'vue'
+import { publishGlobalFeedback } from '../../lib/globalFeedback'
 
 const commonCurrencyOptions = [
   { value: 'USD', label: 'USD · 美元' },
@@ -166,7 +167,7 @@ const breadcrumbs = computed(() => isKol.value
 )
 
 type EditItem = {
-  id: number
+  id: number | null
   product_id: number | null
   sku: string
   product_summary: string
@@ -208,6 +209,23 @@ const currencyOptions = computed(() => {
 const editMode = ref(false)
 
 const enterEditMode = () => { editMode.value = true }
+const addOrderItem = () => {
+  form.items.push({ id: null, product_id: null, sku: '', product_summary: '', quantity: 1, unit_price: '0.00' })
+  form.clearErrors('items')
+}
+const removeOrderItem = (index: number) => {
+  if (form.items.length <= 1) return
+  form.items.splice(index, 1)
+  form.clearErrors('items')
+}
+const initialItemSnapshot = () => props.order.items.map(item => ({
+  id: item.id, product_id: item.product_id, product_summary: item.product_summary ?? '',
+  quantity: Number(item.quantity), unit_price: Number(item.unit_price).toFixed(2),
+}))
+const hasItemChanges = () => JSON.stringify(form.items.map(item => ({
+  id: item.id, product_id: item.product_id, product_summary: item.product_summary ?? '',
+  quantity: Number(item.quantity), unit_price: Number(item.unit_price).toFixed(2),
+}))) !== JSON.stringify(initialItemSnapshot())
 
 const cancelEdit = () => {
   form.reset()
@@ -216,9 +234,24 @@ const cancelEdit = () => {
   editMode.value = false
 }
 
-const submit = () => form.patch(`${basePath.value}/${props.order.id}`, {
-  onSuccess: () => { editMode.value = false },
-})
+const submit = () => {
+  const itemsChanged = hasItemChanges()
+  form.transform(data => {
+    if (itemsChanged) return data
+    const { items: _unchangedItems, ...otherFields } = data
+    return otherFields
+  }).patch(`${basePath.value}/${props.order.id}`, {
+    preserveScroll: true,
+    onSuccess: () => { editMode.value = false },
+    onError: errors => {
+      const reason = errors.items || Object.values(errors).find(Boolean)
+      if (reason) publishGlobalFeedback({
+        state:'BLOCKED', title:'订单修改未保存', message:String(reason),
+        next:'请根据订单商品区域的红色提示修正后重新提交，已填写内容不会丢失。',
+      })
+    },
+  })
+}
 
 const operationalMarkerOptions = [
   { key: 'exception', label: '异常' },
@@ -841,9 +874,11 @@ const submitReplacement = () => {
               </div>
             </div>
           </template>
-          <!-- Edit mode: editable item rows with SkuCombobox -->
+          <!-- Edit mode: stable item IDs, SKU variant selection and explicit add/remove. -->
           <template v-else>
-            <div v-for="(item, index) in form.items" :key="item.id" class="ord-item-row">
+            <p class="ord-item-amendment-info">SKU、颜色或数量变化后，必须重新核对库存与分仓。已分仓、预留库存或开始发货的订单暂不允许直接修改商品。</p>
+            <p v-if="(form.errors as Record<string,string>).items" class="erp-field-error" role="alert">{{ (form.errors as Record<string,string>).items }}</p>
+            <div v-for="(item, index) in form.items" :key="item.id ?? `new-${index}`" class="ord-item-row">
               <div class="ord-item-sku">
                 <label class="erp-form-label">SKU / 产品</label>
                 <SkuCombobox
@@ -867,7 +902,10 @@ const submitReplacement = () => {
                 <label class="erp-form-label">单价（{{ form.currency }}）</label>
                 <input v-model="item.unit_price" type="number" min="0" step="0.01" class="erp-input" required>
               </div>
+              <button type="button" class="erp-btn erp-btn-secondary" :disabled="form.items.length <= 1" @click="removeOrderItem(index)">删除商品</button>
             </div>
+            <button type="button" class="erp-btn erp-btn-secondary ord-add-product" @click="addOrderItem">+ 增加商品 / 赠品</button>
+            <p class="ord-item-gift-hint">赠品选择真实 SKU，数量需大于 0，单价可填 0.00。修改前请先确认客户同意。</p>
           </template>
         </div>
 
@@ -1217,6 +1255,9 @@ const submitReplacement = () => {
 }
 
 /* Item rows — order-specific layout */
+.ord-item-amendment-info { margin: 0 0 12px; font-size: 12px; color: #72510f; background: #fff9e9; padding: 8px 10px; border-radius: 8px; }
+.ord-item-gift-hint { margin: 8px 0 0; font-size: 12px; color: #52656d; }
+.ord-add-product { margin-top: 10px; }
 .ord-item-row {
   display: grid;
   grid-template-columns: 2fr 2fr 1fr 1fr;
