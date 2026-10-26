@@ -177,7 +177,7 @@ final class OrderItemAmendmentPreviewService
         $multiHeld = InventoryReservation::query()->whereIn('order_id', [...$childIds, $order->id])
             ->whereIn('status', ['reserved', 'committed'])->get();
         $multiChildSafe = $children->count() >= 2
-            && $children->every(function (Order $child): bool {
+            && $children->every(function (Order $child) use ($multiHeld): bool {
                 $shipment = $child->shipment;
                 return $child->fulfillment_role === 'original'
                     && $child->order_status?->value === 'pending_shipment'
