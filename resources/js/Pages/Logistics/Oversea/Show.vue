@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Head, router } from '@inertiajs/vue3'
 import { computed, reactive, ref } from 'vue'
+import { publishGlobalFeedback } from '../../../lib/globalFeedback'
 import AuthenticatedLayout from '../../../Layouts/AuthenticatedLayout.vue'
 import ColumnSettingsHeader from '../../../Components/DataGrid/ColumnSettingsHeader.vue'
 import { useAccountGridPreferences, type GridColumnDefinition } from '../../../Composables/useAccountGridPreferences'
@@ -42,6 +43,7 @@ const grid = reactive(useAccountGridPreferences<ColumnKey>({
 const canEditRow = computed(() => props.canOperate || (props.canReview && props.view === 'review'))
 const drafts = reactive<Record<number,{ note:string; carrier:string; service:string; tracking_number:string }>>({})
 const trackingFileInput = ref<HTMLInputElement|null>(null)
+const exportingOrders = ref(false)
 const trackingPreviewRows = computed(() => props.trackingImportPreview?.rows.slice(0, 20) ?? [])
 const canUploadTrackingFile = computed(() => props.warehouseKey !== 'us-3sm')
 const trackingFileHint = computed(() => props.warehouseKey === 'us-3sm'
@@ -80,6 +82,69 @@ const manualShipUsSm = (row:Row) => {
   if (!tracking) { rowErrors[row.order_id] = '请先填写真实 Tracking'; return }
   rowErrors[row.order_id] = ''
   router.post(`/logistics/oversea/us-3sm/orders/${row.order_id}/manual-ship`, { tracking_number:tracking }, { preserveScroll:true })
+}
+// Download XLSX without leaving the workbench on validation failures. 422
+// messages are safe business validation, not a reason to bypass provider gates.
+const downloadOutboundFile = async () => {
+  if (exportingOrders.value || !props.warehouse) return
+  exportingOrders.value = true
+  publishGlobalFeedback({ state:'RUNNING', title:'正在生成仓库下单表', message: props.warehouse.label })
+  try {
+    const response = await fetch(`${basePath.value}/export`, {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+    })
+    if (!response.ok) {
+      let reason = ''
+      try {
+        const payload: unknown = await response.json()
+        if (payload && typeof payload === 'object' && 'message' in payload && typeof payload.message === 'string') {
+          reason = payload.message
+        }
+      } catch { /* The server may return a plain error page. */ }
+      const isValidation = response.status === 422
+      publishGlobalFeedback({
+        state: isValidation ? 'BLOCKED' : 'ERROR',
+        title: isValidation ? '仓库下单表暂无法导出' : '仓库下单表下载失败',
+        message: isValidation
+          ? (reason || '订单未通过仓库导出校验，请联系管理员确认。')
+          : response.status === 401 || response.status === 419
+            ? '登录状态已失效，请重新登录。'
+            : response.status === 403
+              ? '当前账号无权限下载该仓库文件。'
+              : '导出服务暂时不可用，请联系管理员查询日志。',
+        next: isValidation ? '根据提示修正订单字段后重新下载；校验规则不会自动放宽。' : '保留当前页面，检查登录状态或联系管理员。',
+      })
+      return
+    }
+    const contentType = (response.headers.get('content-type') || '').toLowerCase()
+    if (!contentType.includes('spreadsheetml.sheet') && !contentType.includes('application/octet-stream')) {
+      throw new Error('导出服务返回的不是 XLSX 文件，请检查登录状态。')
+    }
+    const contentDisposition = response.headers.get('content-disposition') || ''
+    const suppliedName = contentDisposition.match(/filename\s*=\s*"?([^";]+)"?/i)?.[1] || ''
+    const filename = /^[A-Za-z0-9._-]+\.xlsx$/i.test(suppliedName)
+      ? suppliedName
+      : `007-${props.warehouseKey}-orders.xlsx`
+    const file = await response.blob()
+    const objectUrl = URL.createObjectURL(file)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30000)
+    publishGlobalFeedback({ state:'SUCCESS', title:'仓库下单表已开始下载', message:filename })
+  } catch (error) {
+    publishGlobalFeedback({
+      state:'ERROR', title:'仓库下单表下载失败',
+      message: error instanceof Error && error.message.includes('XLSX') ? error.message : '网络或系统错误，未生成仓库下单表。',
+      next:'无需离开当前页面；请检查网络后重试，仍失败请联系管理员。',
+    })
+  } finally {
+    exportingOrders.value = false
+  }
 }
 const chooseTrackingFile = () => trackingFileInput.value?.click()
 const previewTrackingFile = (event:Event) => {
@@ -154,7 +219,7 @@ const compactPages = computed<(number|string)[]>(() => {
       <header class="oversea-heading">
         <div><h1>{{ pageTitle }}</h1><p>审核 Vita 分仓结果；通过后进入真实下单，驳回则退回运营重新分配。</p></div>
         <div class="oversea-file-actions" v-if="warehouse && view === 'pending'">
-          <a class="file-button file-link" :href="`${basePath}/export`">⇩ 下载仓库下单表</a>
+          <a class="file-button file-link" :href="`${basePath}/export`" :aria-busy="exportingOrders" @click.prevent="downloadOutboundFile">⇩ {{ exportingOrders ? '正在生成下单表…' : '下载仓库下单表' }}</a>
           <input ref="trackingFileInput" class="hidden-file" type="file" accept=".xlsx,.csv,.txt" @change="previewTrackingFile" />
           <button v-if="canOperate && canUploadTrackingFile" type="button" class="file-button primary" @click="chooseTrackingFile">⇧ 上传物流回传表</button>
         </div>
