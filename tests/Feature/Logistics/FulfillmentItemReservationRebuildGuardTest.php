@@ -64,6 +64,30 @@ final class FulfillmentItemReservationRebuildGuardTest extends TestCase
         $this->assertDatabaseMissing('orders', ['fulfillment_parent_id' => $parent->id]);
     }
 
+    public function test_single_warehouse_reassignment_cannot_conflict_with_reserved_stock_location(): void
+    {
+        $parent = $this->order('007-1014-c100003');
+        $reservation = $this->reservation($parent, 'reserved');
+        $other = Warehouse::create([
+            'slug' => 'other-replan', 'code' => 'OTHER-REPLAN',
+            'name' => 'Other Warehouse', 'is_active' => true,
+        ]);
+        $actor = User::factory()->create(['is_active' => true]);
+
+        try {
+            app(FulfillmentDerivedOrderService::class)->materialize(
+                $parent, ['segments' => [['warehouse_id' => $other->id, 'items' => []]]], $actor
+            );
+            $this->fail('A shipment warehouse cannot differ from a held inventory reservation');
+        } catch (HttpExceptionInterface $e) {
+            $this->assertSame(409, $e->getStatusCode());
+        }
+        $this->assertDatabaseHas('inventory_reservations', [
+            'id' => $reservation->id, 'warehouse_id' => $reservation->warehouse_id, 'status' => 'reserved',
+        ]);
+        $this->assertDatabaseMissing('shipments', ['order_id' => $parent->id]);
+    }
+
     public function test_child_committed_reservation_blocks_pending_child_deletion(): void
     {
         $parent = $this->order('007-1014-c100002');
