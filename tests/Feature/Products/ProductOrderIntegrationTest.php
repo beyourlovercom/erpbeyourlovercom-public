@@ -343,8 +343,12 @@ final class ProductOrderIntegrationTest extends TestCase
         $foreignLine = $orders[1]->items->first();
         $body = ['items' => [['id' => $foreignLine->id, 'product_id' => $product->id, 'quantity' => 2, 'unit_price' => '5.00']]];
         $this->actingAs($restricted)->postJson("/customers/orders/{$order->id}/items/preview", $body)->assertForbidden();
-        $this->actingAs($user)->postJson("/customers/orders/{$order->id}/items/preview", $body)->assertStatus(422)
-            ->assertJsonValidationErrors('items.0.id');
+        try {
+            $this->actingAs($user)->postJson("/customers/orders/{$order->id}/items/preview", $body)->assertStatus(422)
+                ->assertJsonValidationErrors('items.0.id');
+        } catch (\Throwable $exception) {
+            throw new \RuntimeException('Preview 422 cross-order source trace: '.$exception->getMessage().' @ '.$exception->getTraceAsString(), 0, $exception);
+        }
     }
 
     public function test_historical_rows_remain_readable_when_items_not_replaced(): void
