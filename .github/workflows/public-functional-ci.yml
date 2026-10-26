@@ -95,4 +95,5 @@ jobs:
           php artisan test tests/Feature/Products/ProductOrderIntegrationTest.php --no-ansi
           php artisan test tests/Feature/Logistics/FulfillmentItemReservationRebuildGuardTest.php --no-ansi
           php artisan test tests/Feature/Orders/OrderItemAtomicReplanTest.php --no-ansi
+          php artisan test tests/Feature/Orders/OrderItemMultiWarehouseReplanTest.php --no-ansi
           ./node_modules/.bin/vitest run resources/js/Pages/Orders/Show.test.ts --maxWorkers=2
