@@ -150,6 +150,7 @@ final class OrderController
             'canOperateLogistics' => $this->logisticsExecutionAccess->allows($request->user()),
             'canViewProfit' => $request->user()?->can('analysis.view') ?? false,
             'canMarkOperational' => $request->user()?->can('orders.edit') ?? false,
+            'canEditOrder' => $request->user()?->can('orders.edit') ?? false,
             'canCreateReplacement' => $this->logisticsExecutionAccess->allows($request->user()) && $this->originalLogisticsStarted($order),
             'canCreateProcurement' => ($request->user()?->can('procurement.create') ?? false) && $order->operationalMarkers->contains('marker', 'stockout'),
             'canManageProductPackaging' => $request->user()?->can('products.operate') ?? false,
