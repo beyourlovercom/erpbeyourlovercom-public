@@ -15,7 +15,10 @@ use Illuminate\Validation\ValidationException;
  */
 final class OrderItemAmendmentPreviewService
 {
-    public function __construct(private readonly InventoryAvailabilityReader $inventory) {}
+    public function __construct(
+        private readonly InventoryAvailabilityReader $inventory,
+        private readonly OrderAmendmentRevision $revisions,
+    ) {}
 
     /**
      * @param list<array{id?:int|null, product_id:int, quantity:int, unit_price:string|int|float, product_summary?:string|null}> $proposed
@@ -149,6 +152,7 @@ final class OrderItemAmendmentPreviewService
 
         return [
             'order_id' => (int) $order->id,
+            'expected_revision' => $this->revisions->forOrder($order),
             'changed' => $changed,
             'rows' => $rows,
             'required_by_product' => $required,
