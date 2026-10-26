@@ -36,7 +36,7 @@
 - [x] GitHub Source Checks。
 - [x] 与正式站完全隔离的 US Mac mini UAT worktree，使用 **内存 SQLite**、无生产 .env、无真实 Woo 发货。
 - [x] 本地订单商品及部分履约专项回归通过（25 tests, 108 assertions；无 warning）。
-- [ ] 全量 PHP 基线和差异分析归档。
+- [x] 全量 PHP 基线和差异分析归档：同一 US Mac mini、相同 vendor/构建、独立内存 SQLite；`main d7df4e16`：1831 passed / 46 failed / 6 skipped / 16839 assertions；`PR #16 1bfe4c8d`：1866 passed / 46 failed / 6 skipped / 17022 assertions。失败项目清单相同，没有新增失败；**46 项旧失败仍保持 OPEN，不算 full-suite PASS**。
 - [ ] MySQL Dev 数据库的并发库存锁/事务回滚测试（SQLite 成功不等于生产 MySQL 并发证明）。
 - [ ] 使用真实员工权限的 Dev Desktop UAT：修改颜色、增加赠品、改数量、单仓/多仓仓库选择、库存不足回滚、已发货拒绝、Woo/财务拒绝。
 - [ ] CI 精确 HEAD 冻结；Dev 生产同版本差异检查、零迁移或明确迁移。
@@ -58,3 +58,14 @@
 - WooCommerce 双向订单行修改、同步冲突/财务退款自动调整。
 - 已有子履约合并/缩减并自动归档历史。
 - UI 美化、Excel 风格数据表、全局 Tabs；均不在 Bug Fix First 主线上。
+
+## A8 本地隔离 UAT 证据（2026-10-26）
+
+- GitHub main SHA: `d7df4e16e912a86ac97d9840a1021a7eced359f4`；PR #16 被测业务代码 HEAD: `1bfe4c8d6955ef96beaaf5fc416c44658dedb9cd`，之后仅修改了本发行门禁文档路径。
+- Candidate isolated worktree: `US Mac mini / AI/uat/order-item-a8-pr16-20261026`；baseline isolated worktree: `AI/uat/order-item-a8-main-baseline-20261026`。
+- 两套代码均显式使用本地 `.env` 测试变量（APP_ENV=testing, DB_CONNECTION=sqlite, DB_DATABASE=:memory:, MAIL_MAILER=array），未复制生产密钥、未使用生产数据库。
+- 初次 full-suite 候选缺失 Vite manifest，构建后重跑；同环境基线对照消除环境差异。
+- 本地候选订单商品 + 部分履约专项：25 passed / 108 assertions / 0 warnings。
+- GitHub Functional [PASS](https://github.com/beyourlovercom/erpbeyourlovercom-public/actions/runs/40303634972)，Source [PASS](https://github.com/beyourlovercom/erpbeyourlovercom-public/actions/runs/40303635001)。
+- 需要单独记录的历史失败：日志中 Woo 产品编号约束、物流手工预留 409、部分菜单/架构冻结契约等；任何此类失败不得被“修改断言凑绿”掩盖。
+- 放行判断：此证据支持 **功能候选进入 Dev 人工 UAT**，不代表生产 MySQL 并发、真实权限或 Owner 审批已经通过。
