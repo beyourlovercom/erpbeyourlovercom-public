@@ -24,6 +24,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Validator;
 use Inertia\Inertia;
 use Inertia\Response;
 use Symfony\Component\HttpFoundation\Response as HttpResponse;
@@ -290,10 +291,17 @@ final class OrderController
     {
         $this->authorizeKind($request, $order);
         KolOrderAccessScope::authorize($request->user(), $order);
-        $validated = $request->validate([
+        $validator = Validator::make($request->all(), [
             ...$this->updateRules($order),
             'items' => ['required', 'array', 'min:1'],
         ]);
+        if ($validator->fails()) {
+            return response()->json([
+                'message' => '订单商品存在无效字段，请检查红色提示后重试。',
+                'errors' => $validator->errors()->toArray(),
+            ], 422);
+        }
+        $validated = $validator->validated();
 
         return response()->json($previews->preview($order, $validated['items']));
     }
