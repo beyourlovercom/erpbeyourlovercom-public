@@ -229,7 +229,8 @@ final class OverseaWarehouseWorkbenchTest extends TestCase
         $order = $this->orderAt($warehouses['US-LA'], 'LEGACY-NONCANONICAL-ID');
         $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
 
-        $this->actingAs($user)->get('/logistics/oversea/us-moreplus/export')->assertStatus(422);
+        $this->actingAs($user)->get('/logistics/oversea/us-moreplus/export')
+            ->assertRedirect('/logistics/oversea/us-moreplus?view=pending')->assertSessionHas('error');
     }
 
     public function test_moreplus_export_fails_closed_when_recipient_phone_is_missing(): void
@@ -240,7 +241,188 @@ final class OverseaWarehouseWorkbenchTest extends TestCase
         $order->address()->update(['phone' => '']);
         $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
 
-        $this->actingAs($user)->get('/logistics/oversea/us-moreplus/export')->assertStatus(422);
+        $this->actingAs($user)->get('/logistics/oversea/us-moreplus/export')
+            ->assertRedirect('/logistics/oversea/us-moreplus?view=pending')->assertSessionHas('error');
+    }
+
+    public function test_de_tianyun_export_validation_returns_order_and_field_in_json_without_creating_xlsx(): void
+    {
+        $user = $this->userWith(['logistics.view', 'logistics.operate']);
+        $warehouses = $this->warehouses();
+        $order = $this->orderAt($warehouses['DE'], '007erp-0920-c40888', 'DE');
+        $order->address()->update(['phone' => '']);
+        $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
+
+        $this->actingAs($user)->getJson('/logistics/oversea/de-tianyun/export')
+            ->assertStatus(422)
+            ->assertJsonPath('code', 'OVERSEA_EXPORT_BLOCKED')
+            ->assertJsonPath('message', '订单 007erp-0920-c40888 缺少电话，不能导出仓库文件。');
+
+        // Direct navigation must return to the workbench instead of an unreadable 422 page.
+        $this->actingAs($user)->get('/logistics/oversea/de-tianyun/export')
+            ->assertRedirect('/logistics/oversea/de-tianyun?view=pending')
+            ->assertSessionHas('error', fn ($message) => str_contains((string) $message, '缺少电话'));
+        $this->assertDatabaseHas('shipments', [
+            'order_id' => $order->id, 'shipment_status' => 'pending', 'tracking_number' => null,
+        ]);
+    }
+
+    public function test_export_invalid_reference_preserves_provider_gate_and_exposes_reason_as_json(): void
+    {
+        $user = $this->userWith(['logistics.view', 'logistics.operate']);
+        $warehouses = $this->warehouses();
+        $order = $this->orderAt($warehouses['US-LA'], 'NONCANONICAL-123');
+        $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
+
+        $this->actingAs($user)->getJson('/logistics/oversea/us-moreplus/export')
+            ->assertStatus(422)->assertJsonPath('code', 'OVERSEA_EXPORT_BLOCKED')
+            ->assertJsonPath('message', '订单 NONCANONICAL-123 无法生成海外仓客户参考号');
+    }
+
+    public function test_de_export_preview_allows_operator_to_continue_with_valid_orders_and_exception_sheet(): void
+    {
+        $user = $this->userWith(['logistics.view', 'logistics.operate']);
+        $warehouses = $this->warehouses();
+        $good = $this->orderAt($warehouses['DE'], '007erp-0920-c40881', 'DE');
+        $bad = $this->orderAt($warehouses['DE'], '007erp-0920-c40882', 'DE');
+        $bad->address()->update(['phone' => '']);
+        foreach ([$good, $bad] as $order) {
+            $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
+        }
+
+        $preview = $this->actingAs($user)->getJson('/logistics/oversea/de-tianyun/export/preview')
+            ->assertOk()
+            ->assertJsonPath('total_count', 2)
+            ->assertJsonPath('valid_count', 1)
+            ->assertJsonPath('issue_count', 1)
+            ->assertJsonPath('issues.0.order_number', '007erp-0920-c40882')
+            ->assertJsonPath('issues.0.reason', '订单 007erp-0920-c40882 缺少电话，不能导出仓库文件。')
+            ->json();
+        $token = $preview['token'];
+
+        // The confirmed download never fabricates missing contact details or loses the issue.
+        $response = $this->actingAs($user)->get('/logistics/oversea/de-tianyun/export?confirm=1&token='.$token)
+            ->assertOk();
+        $this->assertStringContainsString('spreadsheetml.sheet', (string) $response->headers->get('Content-Type'));
+        $rows = $this->xlsxRows($response->getContent());
+        $this->assertCount(2, $rows);
+        $this->assertSame('C40881-007', $rows[1][3]);
+        $this->assertStringNotContainsString('C40882-007', json_encode($rows));
+
+        $tmp = tempnam(sys_get_temp_dir(), 'review-export-');
+        file_put_contents($tmp, $response->getContent());
+        $zip = new ZipArchive;
+        $this->assertTrue($zip->open($tmp) === true);
+        $this->assertFalse($zip->locateName('xl/worksheets/sheet2.xml')); // Provider must see its original one-sheet schema.
+        $workbook = $zip->getFromName('xl/workbook.xml');
+        $zip->close();
+        @unlink($tmp);
+        $workbookDoc = new DOMDocument;
+        $this->assertTrue($workbookDoc->loadXML($workbook));
+        $sheets = $workbookDoc->getElementsByTagNameNS('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'sheet');
+        $this->assertSame(1, $sheets->length);
+        $this->assertStringNotContainsString('C40882-007', $response->getContent());
+        $this->assertDatabaseHas('shipments', ['order_id' => $good->id, 'shipment_status' => 'pending']);
+        $this->assertDatabaseHas('shipments', ['order_id' => $bad->id, 'shipment_status' => 'pending']);
+        // The confirmation token is one-time use: no old preview can be silently replayed.
+        $this->actingAs($user)->getJson('/logistics/oversea/de-tianyun/export?confirm=1&token='.$token)
+            ->assertStatus(409);
+    }
+
+    public function test_preflight_identifies_multiple_missing_fields_and_works_for_all_five_warehouses(): void
+    {
+        $user = $this->userWith(['logistics.view', 'logistics.operate']);
+        $warehouses = $this->warehouses();
+        foreach ([
+            ['US-NY', 'us-ny', '007erp-0920-c50111'],
+            ['US-LA', 'us-moreplus', '007erp-0920-c50112'],
+            ['US-SM', 'us-3sm', '007erp-0920-c50113'],
+            ['DE', 'de-tianyun', '007erp-0920-c50114'],
+            ['CA', 'ca', '007erp-0920-k50115'],
+        ] as [$code, $key, $erpId]) {
+            $order = $this->orderAt($warehouses[$code], $erpId, $code === 'DE' ? 'DE' : 'US');
+            $order->address()->update(['phone' => '', 'postal_code' => '', 'city' => '']);
+            $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
+
+            $preview = $this->actingAs($user)->getJson("/logistics/oversea/{$key}/export/preview")
+                ->assertOk()->assertJsonPath('valid_count', 0)->assertJsonPath('issue_count', 1)->json();
+            $reason = $preview['issues'][0]['reason'];
+            $this->assertStringContainsString('电话', $reason);
+            $this->assertStringContainsString('邮编', $reason);
+            $this->assertStringContainsString('城市', $reason);
+            $this->assertSame($erpId, $preview['issues'][0]['order_number']);
+            $this->assertDatabaseHas('shipments', [
+                'order_id' => $order->id, 'shipment_status' => 'pending', 'tracking_number' => null,
+            ]);
+        }
+    }
+
+    public function test_reviewed_export_rejects_changed_orders_instead_of_reusing_stale_warning(): void
+    {
+        $user = $this->userWith(['logistics.view', 'logistics.operate']);
+        $warehouses = $this->warehouses();
+        $order = $this->orderAt($warehouses['DE'], '007erp-0920-c40883', 'DE');
+        $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
+        $preview = $this->actingAs($user)->getJson('/logistics/oversea/de-tianyun/export/preview')->assertOk()->json();
+        $order->address()->update(['phone' => '']);
+        $this->actingAs($user)->getJson('/logistics/oversea/de-tianyun/export?confirm=1&token='.$preview['token'])
+            ->assertStatus(409)
+            ->assertJsonPath('code', 'OVERSEA_EXPORT_BLOCKED');
+        $this->assertDatabaseHas('shipments', [
+            'order_id' => $order->id, 'shipment_status' => 'pending', 'tracking_number' => null,
+        ]);
+    }
+
+    public function test_reviewed_export_all_invalid_orders_downloads_exception_only_not_fake_provider_rows(): void
+    {
+        $user = $this->userWith(['logistics.view', 'logistics.operate']);
+        $warehouses = $this->warehouses();
+        $order = $this->orderAt($warehouses['CA'], '007erp-0920-k26011399', 'CA');
+        $order->address()->update(['phone' => '']);
+        $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
+        $preview = $this->actingAs($user)->getJson('/logistics/oversea/ca/export/preview')
+            ->assertOk()->assertJsonPath('valid_count', 0)->assertJsonPath('issue_count', 1)->json();
+        $response = $this->actingAs($user)->get('/logistics/oversea/ca/export?confirm=1&token='.$preview['token'])
+            ->assertOk();
+        $rows = $this->xlsxRows($response->getContent());
+        $this->assertCount(1, $rows); // Provider-facing header only, no invalid customer.
+        $this->assertSame('客户参考号', $rows[0][0]);
+    }
+
+    public function test_all_records_review_draft_preserves_incomplete_recipient_and_all_eleven_skus(): void
+    {
+        $user = $this->userWith(['logistics.view', 'logistics.operate']);
+        $warehouses = $this->warehouses();
+        $order = $this->orderAt($warehouses['DE'], '007erp-0920-c50999', 'DE');
+        $order->address()->update(['phone' => '', 'city' => '', 'postal_code' => '']);
+        $productId = Product::query()->where('sku', 'REVIEW-SKU')->value('id');
+        for ($i = 2; $i <= 11; $i++) {
+            $order->items()->create([
+                'product_id' => $productId, 'product_summary' => "Product {$i}", 'sku' => "SKU-{$i}", 'quantity' => $i,
+                'unit_price' => '10.00', 'line_revenue' => '10.00',
+            ]);
+        }
+        $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
+
+        $preview = $this->actingAs($user)->getJson('/logistics/oversea/de-tianyun/export/preview')
+            ->assertOk()->assertJsonPath('valid_count', 0)->assertJsonPath('issue_count', 1)->json();
+
+        $response = $this->actingAs($user)->get('/logistics/oversea/de-tianyun/export?confirm=1&token='.$preview['token'].'&mode=draft')
+            ->assertOk();
+        $this->assertStringContainsString('review-draft', (string) $response->headers->get('Content-Disposition'));
+        $rows = $this->xlsxRows($response->getContent());
+        $this->assertCount(12, $rows); // 1 header and every single SKU; nothing truncated.
+        $this->assertSame('ERP订单号', $rows[0][0]);
+        $this->assertSame('007erp-0920-c50999', $rows[1][0]);
+        $this->assertSame('', $rows[1][4]); // Actual missing phone, never fabricated.
+        $this->assertSame('REVIEW-SKU', $rows[1][11]);
+        $skuQuantities = array_column(array_slice($rows, 1), 12, 11);
+        $this->assertCount(11, $skuQuantities);
+        $this->assertSame('11', $skuQuantities['SKU-11']);
+        $this->assertStringContainsString('存在问题', $rows[1][14]);
+        $this->assertDatabaseHas('shipments', [
+            'order_id' => $order->id, 'shipment_status' => 'pending', 'tracking_number' => null,
+        ]);
     }
 
     public function test_pending_moreplus_orders_download_real_xlsx_block_rows(): void
@@ -337,7 +519,8 @@ final class OverseaWarehouseWorkbenchTest extends TestCase
         $order->address()->update(['address_line_1' => str_repeat('A', 36)]);
         $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
 
-        $this->actingAs($user)->get('/logistics/oversea/us-moreplus/export')->assertStatus(422);
+        $this->actingAs($user)->get('/logistics/oversea/us-moreplus/export')
+            ->assertRedirect('/logistics/oversea/us-moreplus?view=pending')->assertSessionHas('error');
     }
 
     public function test_wms_export_fails_closed_above_confirmed_ten_sku_limit(): void
@@ -354,7 +537,8 @@ final class OverseaWarehouseWorkbenchTest extends TestCase
         }
         $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
 
-        $this->actingAs($user)->get('/logistics/oversea/us-ny/export')->assertStatus(422);
+        $this->actingAs($user)->get('/logistics/oversea/us-ny/export')
+            ->assertRedirect('/logistics/oversea/us-ny?view=pending')->assertSessionHas('error');
     }
 
     public function test_wms_and_canada_exports_fail_closed_when_recipient_phone_is_missing(): void
@@ -368,7 +552,7 @@ final class OverseaWarehouseWorkbenchTest extends TestCase
             $order = $this->orderAt($warehouse, $erp, $country);
             $order->address()->update(['phone' => '']);
             $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
-            $this->actingAs($user)->get($url)->assertStatus(422);
+            $this->actingAs($user)->get($url)->assertRedirect()->assertSessionHas('error');
         }
     }
 

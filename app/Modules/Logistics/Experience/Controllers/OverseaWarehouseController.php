@@ -12,13 +12,16 @@ use App\Modules\Logistics\Application\OverseaWarehouseReviewService;
 use App\Modules\Logistics\Infrastructure\Models\Shipment;
 use App\Modules\Orders\Infrastructure\Models\Order;
 use DomainException;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Inertia\Response;
 use InvalidArgumentException;
 use Symfony\Component\HttpFoundation\Response as HttpResponse;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 
 final class OverseaWarehouseController
 {
@@ -81,9 +84,35 @@ final class OverseaWarehouseController
         ]);
     }
 
-    public function export(Request $request, string $warehouse): HttpResponse
+    /**
+     * Preflight all pending shipments. A validation warning is not a batch-wide
+     * export blocker: the operator explicitly chooses between editing and
+     * downloading compliant rows with a separate exception sheet.
+     */
+    public function previewExport(Request $request, string $warehouse): JsonResponse
     {
         $warehouse = in_array($warehouse, ['us-sm', 'us-sj', 'usa-sj'], true) ? 'us-3sm' : $warehouse;
+        $shipments = $this->pendingExportShipments($warehouse);
+        $plan = $this->outboundFiles->inspect($warehouse, $shipments);
+        $token = Str::random(48);
+        $request->session()->put($this->exportSessionKey($warehouse), [
+            'token' => $token,
+            'fingerprint' => $plan['fingerprint'],
+            'created_at' => now()->timestamp,
+        ]);
+
+        return response()->json([
+            'total_count' => count($plan['valid']) + count($plan['issues']),
+            'valid_count' => count($plan['valid']),
+            'issue_count' => count($plan['issues']),
+            'issues' => $plan['issues'],
+            'token' => $token,
+        ]);
+    }
+
+    /** @return \Illuminate\Support\Collection<int,Shipment> */
+    private function pendingExportShipments(string $warehouse): \Illuminate\Support\Collection
+    {
         $warehouseMap = $this->warehouseMap();
         $selectedWarehouse = $warehouseMap[$warehouse] ?? null;
         abort_unless($selectedWarehouse, 404, '仓库尚未建立');
@@ -95,16 +124,74 @@ final class OverseaWarehouseController
                 ->where('order_status', '!=', 'cancelled')
                 ->whereDoesntHave('externalReferences', fn ($r) => $r->where('provider', 'historical_logistics')));
         $this->applyView($shipments, 'pending');
+
+        return $shipments->latest('id')->get();
+    }
+
+    private function exportSessionKey(string $warehouse): string
+    {
+        return 'logistics.oversea_export_preview.'.$warehouse;
+    }
+
+    public function export(Request $request, string $warehouse): HttpResponse
+    {
+        $warehouse = in_array($warehouse, ['us-sm', 'us-sj', 'usa-sj'], true) ? 'us-3sm' : $warehouse;
+        $shipments = $this->pendingExportShipments($warehouse);
+        $confirmed = $request->query('confirm') === '1';
+        if ($confirmed) {
+            $stored = $request->session()->get($this->exportSessionKey($warehouse));
+            $token = (string) $request->query('token', '');
+            if (! is_array($stored) || $token === ''
+                || ! hash_equals((string) ($stored['token'] ?? ''), $token)
+                || now()->timestamp - (int) ($stored['created_at'] ?? 0) > 600) {
+                return $this->exportFailure($request, $warehouse, '导出确认已失效，请重新检查订单并确认。', 409);
+            }
+            $plan = $this->outboundFiles->inspect($warehouse, $shipments);
+            if (! hash_equals((string) ($stored['fingerprint'] ?? ''), $plan['fingerprint'])) {
+                $request->session()->forget($this->exportSessionKey($warehouse));
+                return $this->exportFailure($request, $warehouse, '订单数据已变化，请重新检查最新问题后再决定导出。', 409);
+            }
+        }
+
         try {
-            $file = $this->outboundFiles->export($warehouse, $shipments->latest('id')->get());
-        } catch (DomainException|InvalidArgumentException $e) {
-            abort(422, $e->getMessage());
+            if ($confirmed && $request->query('mode') === 'draft') {
+                $file = $this->outboundFiles->exportReviewDraft($warehouse, $shipments, $plan['issues']);
+            } elseif ($confirmed && in_array($request->query('mode', 'valid'), ['valid', null], true)) {
+                $file = $this->outboundFiles->exportReviewed($warehouse, $plan['valid']);
+            } elseif ($confirmed) {
+                return $this->exportFailure($request, $warehouse, '未知导出模式，请重新选择。', 422);
+            } else {
+                $file = $this->outboundFiles->export($warehouse, $shipments);
+            }
+        } catch (DomainException|InvalidArgumentException|HttpExceptionInterface $e) {
+            // The provider export validation deliberately fails closed. Surface the
+            // offending order/field without replacing the error with a 500 page.
+            if ($e instanceof HttpExceptionInterface && $e->getStatusCode() !== 422) {
+                throw $e;
+            }
+            $reason = trim($e->getMessage()) ?: '待发货订单未通过仓库导出校验。';
+
+            return $this->exportFailure($request, $warehouse, $reason, 422);
+        }
+
+        if ($confirmed) {
+            $request->session()->forget($this->exportSessionKey($warehouse));
         }
 
         return response($file['bytes'], 200, [
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'Content-Disposition' => 'attachment; filename="'.$file['filename'].'"',
         ]);
+    }
+
+    private function exportFailure(Request $request, string $warehouse, string $message, int $status): HttpResponse
+    {
+        if ($request->expectsJson()) {
+            return response()->json(['code' => 'OVERSEA_EXPORT_BLOCKED', 'message' => $message], $status);
+        }
+
+        return redirect("/logistics/oversea/{$warehouse}?view=pending")
+            ->with('error', "仓库下单表无法导出：{$message}");
     }
 
     public function previewTrackingReturn(Request $request, string $warehouse): RedirectResponse

@@ -26,6 +26,11 @@ final class Wms64OutboundExporter
         private readonly WarehouseOrderReference $references,
     ) {}
 
+    public function validate(string $warehouseKey, Shipment $shipment): void
+    {
+        $this->row($warehouseKey, $shipment);
+    }
+
     /** @param iterable<Shipment> $shipments */
     public function export(string $warehouseKey, iterable $shipments): string
     {

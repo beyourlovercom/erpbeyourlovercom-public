@@ -18,6 +18,11 @@ final class MorePlusOutboundExporter
         private readonly WarehouseOrderReference $references,
     ) {}
 
+    public function validate(Shipment $shipment): void
+    {
+        $this->rows($shipment);
+    }
+
     /** @param iterable<Shipment> $shipments */
     public function export(iterable $shipments): string
     {

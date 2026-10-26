@@ -23,6 +23,11 @@ final class CanadaOutboundExporter
         private readonly WarehouseOrderReference $references,
     ) {}
 
+    public function validate(Shipment $shipment): void
+    {
+        $this->row($shipment);
+    }
+
     /** @param iterable<Shipment> $shipments */
     public function export(iterable $shipments): string
     {
