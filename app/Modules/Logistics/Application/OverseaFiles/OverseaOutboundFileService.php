@@ -47,10 +47,17 @@ final class OverseaOutboundFileService
                 if ($e instanceof HttpExceptionInterface && $e->getStatusCode() !== 422) {
                     throw $e;
                 }
+                $message = $e->getMessage() ?: '仓库模板字段校验失败';
+                $missing = $this->missingFields($warehouseKey, $shipment);
+                foreach ($missing as $field) {
+                    if (! str_contains($message, $field)) {
+                        $message .= '；缺少'.$field;
+                    }
+                }
                 $issues[] = [
                     'order_id' => $order?->id,
                     'order_number' => (string) ($order?->erp_order_id ?: '未知订单'),
-                    'reason' => $e->getMessage() ?: '仓库模板字段校验失败',
+                    'reason' => $message,
                 ];
             }
         }
@@ -60,6 +67,50 @@ final class OverseaOutboundFileService
             'issues' => $issues,
             'fingerprint' => hash('sha256', json_encode($snapshots, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)),
         ];
+    }
+
+    /**
+     * Add known missing recipient fields to the provider's first failure.
+     * The exporter remains the source of truth for provider-specific validity;
+     * this only improves the human diagnostic text without changing validation.
+     *
+     * @return list<string>
+     */
+    private function missingFields(string $warehouseKey, Shipment $shipment): array
+    {
+        $address = $shipment->order?->address;
+        if (! $address) {
+            return [];
+        }
+        $required = [
+            'country' => '国家',
+            'recipient_name' => '收件人',
+            'phone' => '电话',
+            'city' => '城市',
+            'postal_code' => '邮编',
+        ];
+        if ($warehouseKey === 'ca') {
+            if (trim((string) $address->address_line_1) === '' && trim((string) $address->address_line_2) === '') {
+                $required['address_line_1'] = '街道';
+            }
+        } else {
+            $required['address_line_1'] = '地址1';
+        }
+        if (in_array(strtoupper(trim((string) $address->country)), ['US', 'CA'], true)) {
+            $required['province_state'] = '州/省';
+        }
+        $missing = [];
+        foreach ($required as $key => $field) {
+            if ($key === 'address_line_1' && $warehouseKey === 'ca') {
+                $missing[] = $field;
+                continue;
+            }
+            if (trim((string) $address->{$key}) === '') {
+                $missing[] = $field;
+            }
+        }
+
+        return $missing;
     }
 
     /**
