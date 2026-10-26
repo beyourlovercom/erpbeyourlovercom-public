@@ -92,5 +92,5 @@ jobs:
       - name: Order item stable identity and amendment safety regressions
         shell: bash
         run: |
-          php artisan test tests/Feature/Products/ProductOrderIntegrationTest.php --no-ansi
+          php artisan test tests/Feature/Products/ProductOrderIntegrationTest.php tests/Feature/Logistics/FulfillmentItemReservationRebuildGuardTest.php --no-ansi
           ./node_modules/.bin/vitest run resources/js/Pages/Orders/Show.test.ts --maxWorkers=2
