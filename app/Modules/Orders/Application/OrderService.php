@@ -226,12 +226,33 @@ final class OrderService
     }
 
     /**
+     * Called only by OrderItemAtomicReplanService within its encompassing
+     * inventory + allocation transaction, after live guards and old holds
+     * have been checked. Never expose a generic controller override.
+     *
+     * @param list<array<string,mixed>> $items
+     */
+    public function amendItemsWithinAtomicReplan(Order $order, array $items, Authenticatable $actor): Order
+    {
+        return DB::transaction(function () use ($order, $items, $actor): Order {
+            $locked = Order::query()->whereKey($order->getKey())->lockForUpdate()->firstOrFail();
+            $before = ['items' => $locked->items()->get()->toArray()];
+            $this->reconcileOrderItems($locked, $items, true);
+            $this->record($actor, 'order.items.atomic_replan', $locked,
+                before: $before, after: ['items' => $locked->items()->get()->toArray()],
+                reason: 'approved_pending_fulfillment_replan');
+
+            return $locked->fresh(['items', 'address', 'shipment']);
+        });
+    }
+
+    /**
      * Preserve stable order_item IDs. FulfillmentAllocation plans and SKU-level
      * reservations refer to these identities; never delete/recreate all items.
      *
      * @param list<array<string,mixed>> $submitted
      */
-    private function reconcileOrderItems(Model $order, array $submitted): void
+    private function reconcileOrderItems(Model $order, array $submitted, bool $atomicReplan = false): void
     {
         $existing = $order->items()->lockForUpdate()->orderBy('id')->get();
         $existingById = $existing->keyBy('id');
@@ -282,8 +303,8 @@ final class OrderService
         $shipment = $order->shipment()->lockForUpdate()->first();
         $unsafe = $order->order_status?->value !== 'pending_shipment'
             || $order->fulfillment_parent_id !== null
-            || $order->fulfillmentChildren()->exists()
-            || $order->fulfillmentAllocation()->exists()
+            || (! $atomicReplan && $order->fulfillmentChildren()->exists())
+            || (! $atomicReplan && $order->fulfillmentAllocation()->exists())
             || ($shipment && (
                 $shipment->shipment_status !== 'pending'
                 || filled($shipment->tracking_number)
