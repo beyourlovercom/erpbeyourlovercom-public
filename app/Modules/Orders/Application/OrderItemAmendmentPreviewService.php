@@ -145,10 +145,26 @@ final class OrderItemAmendmentPreviewService
             $stock[] = [
                 'warehouse_id' => $warehouseId,
                 'warehouse_name' => $wh['name'],
+                'warehouse_code' => (string) ($wh['code'] ?? ''),
                 'single_warehouse_candidate' => $allEnough,
                 'details' => $details,
             ];
         }
+
+        $singleAtomicEligible = $changed
+            && $order->source_type !== OrderSourceType::WooCommerce
+            && $order->fulfillment_parent_id === null
+            && $order->order_status?->value === 'pending_shipment'
+            && ! $actuallyStarted
+            && $children->isEmpty()
+            && $order->fulfillmentAllocation?->status === 'submitted'
+            && count((array) ($order->fulfillmentAllocation?->plan_snapshot['segments'] ?? [])) === 1
+            && $reservations->count() === 1
+            && $reservations->first()?->status === 'reserved'
+            && $shipment !== null
+            && (int) $shipment->warehouse_id === (int) $reservations->first()?->warehouse_id
+            && ! $order->procurementOrder()->exists()
+            && ! $order->shipmentAttempts()->exists();
 
         return [
             'order_id' => (int) $order->id,
@@ -164,6 +180,7 @@ final class OrderItemAmendmentPreviewService
                 'id' => (int) $r->id, 'warehouse_id' => (int) $r->warehouse_id, 'status' => $r->status,
             ])->values()->all(),
             'requires_replan' => $linked || $hasActiveReservation,
+            'can_atomic_single_replan' => $singleAtomicEligible,
             'can_save_direct' => ! $changed || $issues === [],
             'issues' => $issues,
             'stock_by_warehouse' => $stock,
