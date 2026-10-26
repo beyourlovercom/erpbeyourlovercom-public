@@ -94,6 +94,7 @@ jobs:
         run: |
           php artisan test tests/Feature/Products/ProductOrderIntegrationTest.php --no-ansi
           php artisan test tests/Feature/Logistics/FulfillmentItemReservationRebuildGuardTest.php --no-ansi
+          php artisan test tests/Feature/Orders/OrderAmendmentRevisionTimezoneTest.php --no-ansi
           php artisan test tests/Feature/Orders/OrderItemAtomicReplanTest.php --no-ansi
           php artisan test tests/Feature/Orders/OrderItemMultiWarehouseReplanTest.php --no-ansi
           php artisan test tests/Feature/Logistics/PendingFulfillmentReallocationTest.php --no-ansi
