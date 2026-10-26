@@ -320,9 +320,15 @@ final class OrderService
         }
         // Woo-linked order items must retain external source identity. A
         // separate Woo reconciliation contract is required before amending.
-        if ($order->source_type === OrderSourceType::WooCommerce) {
+        if (! in_array($order->source_type, [OrderSourceType::Manual, OrderSourceType::ManualOther], true)
+            || $order->externalReferences()->where('provider', 'woocommerce')->exists()) {
             throw ValidationException::withMessages([
-                'items' => 'WooCommerce 来源订单的商品变更须先完成官网/ERP 一致性审核，目前暂不允许直接覆盖。',
+                'items' => '此订单关联外部商城。商品变更必须先完成官网/ERP 双向同步契约，当前不可直接改写。',
+            ]);
+        }
+        if ($order->financials()->exists() || $order->costEntries()->exists()) {
+            throw ValidationException::withMessages([
+                'items' => '订单已有付款、退款或成本入账证据。请先完成财务差额与补退款审核，不能直接改写商品金额。',
             ]);
         }
 
