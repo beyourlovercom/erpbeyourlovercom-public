@@ -246,6 +246,59 @@ final class OrderItemMultiWarehouseReplanTest extends TestCase
         }
     }
 
+    public function test_reducing_three_legs_to_two_is_blocked_to_preserve_released_reservation_history(): void
+    {
+        [$actor, $order, $products, $warehouses, $oldHolds] = $this->setupSplit();
+        $gift = Product::query()->create([
+            'sku' => 'MULTI-AUDIT-GIFT', 'name' => 'Gift with history', 'source_type' => 'manual',
+            'product_type' => 'simple', 'is_active' => true,
+        ]);
+        WarehouseInventory::query()->create([
+            'warehouse_id' => $warehouses['US-SM']->id, 'product_id' => $gift->id,
+            'quantity_on_hand' => 5, 'quantity_reserved' => 0,
+        ]);
+        $items = $order->items()->orderBy('id')->get();
+        $first = app(OrderItemMultiWarehouseReplanService::class)->commit(
+            $order, [
+                ['id' => $items[0]->id, 'product_id' => $products['A']->id, 'quantity' => 2, 'unit_price' => '9.99'],
+                ['id' => $items[1]->id, 'product_id' => $products['B']->id, 'quantity' => 1, 'unit_price' => '19.99'],
+                ['id' => null, 'product_id' => $gift->id, 'quantity' => 1, 'unit_price' => '0.00'],
+            ],
+            [
+                ['item_index' => 0, 'source_code' => 'US-LA'],
+                ['item_index' => 1, 'source_code' => 'US-NY'],
+                ['item_index' => 2, 'source_code' => 'US-SM'],
+            ],
+            app(OrderAmendmentRevision::class)->forOrder($order),
+            'Customer approved a complimentary gift', $actor,
+        );
+        $this->assertCount(3, $first['new_reservations']);
+        $itemsNow = $order->items()->orderBy('id')->get();
+        $revision = app(OrderAmendmentRevision::class)->forOrder($order);
+        try {
+            app(OrderItemMultiWarehouseReplanService::class)->commit(
+                $order, [
+                    ['id' => $itemsNow[0]->id, 'product_id' => $products['A']->id, 'quantity' => 2, 'unit_price' => '9.99'],
+                    ['id' => $itemsNow[1]->id, 'product_id' => $products['B']->id, 'quantity' => 1, 'unit_price' => '19.99'],
+                ],
+                [
+                    ['item_index' => 0, 'source_code' => 'US-LA'],
+                    ['item_index' => 1, 'source_code' => 'US-NY'],
+                ], $revision, 'Customer no longer wants the extra gift', $actor,
+            );
+            $this->fail('Retiring an existing reserved child needs explicit historical evidence retention');
+        } catch (HttpExceptionInterface $e) {
+            $this->assertSame(409, $e->getStatusCode());
+        }
+        $this->assertCount(3, $order->fresh()->originalFulfillmentChildren);
+        $this->assertSame($revision, app(OrderAmendmentRevision::class)->forOrder($order));
+        foreach ($first['new_reservations'] as $r) {
+            $this->assertDatabaseHas('inventory_reservations', [
+                'id' => $r['reservation_id'], 'status' => 'reserved',
+            ]);
+        }
+    }
+
     public function test_duplicate_item_assignments_fail_before_any_reservation_release(): void
     {
         [$actor, $order, $products, $warehouses, $holds] = $this->setupSplit();
