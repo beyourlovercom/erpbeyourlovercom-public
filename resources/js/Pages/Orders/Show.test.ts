@@ -443,6 +443,65 @@ describe('Orders/Show V2', () => {
     expect(router.reload).toHaveBeenCalledWith()
   })
 
+  it('requires per-item warehouse choices and explicit consent for A5-B multi-warehouse replan', async () => {
+    vi.mocked(axios.post).mockReset()
+    vi.mocked(router.reload).mockClear()
+    vi.mocked(axios.post)
+      .mockResolvedValueOnce({data:{
+        changed:true, can_save_direct:false, can_atomic_single_replan:false,
+        can_atomic_multi_replan:true, requires_replan:true, no_writes:true,
+        expected_revision:'b'.repeat(64), old_items_gross:'39.98',
+        new_items_gross:'69.97', gross_delta:'29.99', currency:'USD',
+        rows:[{order_item_id:11,operation:'update',
+          before:{sku:'SKU-B',quantity:1},after:{sku:'SKU-B',quantity:3}}],
+        issues:['多仓子履约需要重新确认'],
+        stock_by_warehouse:[
+          {warehouse_id:1,warehouse_code:'US-LA',warehouse_name:'美西仓',
+            single_warehouse_candidate:false,
+            details:[{product_id:5,required:2,available:10,enough:true},
+              {product_id:22,required:3,available:0,enough:false}]},
+          {warehouse_id:2,warehouse_code:'US-SM',warehouse_name:'世迈仓',
+            single_warehouse_candidate:false,
+            details:[{product_id:5,required:2,available:0,enough:false},
+              {product_id:22,required:3,available:8,enough:true}]},
+        ],
+        inventory_note:'只读库存',
+      }})
+      .mockResolvedValueOnce({data:{parent_order_id:1,new_reservations:[{order_id:11},{order_id:12}]}})
+    const order = {...baseOrder,items:[
+      ...baseOrder.items,
+      {id:11,product_id:22,product_summary:'Product B',sku:'SKU-B',quantity:1,unit_price:'29.99'},
+    ]}
+    const wrapper = mount(Show, {props:{order,audit,canEditOrder:true,canOperateLogistics:true}})
+    await wrapper.findAll('button').find(b=>b.text()==='编辑订单')!.trigger('click')
+    await wrapper.findAll('.ord-item-row input[type="number"][min="1"]')[1].setValue('3')
+    await wrapper.findAll('button').find(b=>b.text().includes('检查 SKU、库存与分仓影响'))!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.ord-multi-replan-approval').text()).toContain('多仓库存原子重规划')
+    const confirm = wrapper.get('.ord-multi-replan-approval button')
+    expect(confirm.attributes('disabled')).toBeDefined()
+    expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(1)
+    const selects=wrapper.findAll('.ord-multi-replan-approval select')
+    await selects[0].setValue('US-LA')
+    await selects[1].setValue('US-SM')
+    await wrapper.get('.ord-multi-replan-approval textarea').setValue('Customer confirmed replacement colors')
+    await wrapper.get('.ord-multi-replan-approval input[type="checkbox"]').setValue(true)
+    await confirm.trigger('click')
+    await flushPromises()
+    expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(axios.post)).toHaveBeenLastCalledWith(
+      '/customers/orders/1/items/replan-multi',expect.objectContaining({
+        expected_revision:'b'.repeat(64),
+        assignments:[
+          {item_index:0,source_code:'US-LA'},
+          {item_index:1,source_code:'US-SM'},
+        ],
+      }),
+    )
+    expect(globalFeedback.value.state).toBe('SUCCESS')
+    expect(router.reload).toHaveBeenCalledWith()
+  })
+
   it('does not show the order edit entry to a user without orders.edit', () => {
     const wrapper = mount(Show, { props:{ order:baseOrder, audit, canEditOrder:false } })
     expect(wrapper.findAll('button').some(b => b.text() === '编辑订单')).toBe(false)
