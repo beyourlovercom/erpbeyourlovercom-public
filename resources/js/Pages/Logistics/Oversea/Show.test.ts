@@ -1,5 +1,6 @@
-import { mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { globalFeedback } from '../../../lib/globalFeedback'
 import Show from './Show.vue'
 
 const { routerPost, routerPatch, routerVisit } = vi.hoisted(() => ({
@@ -39,6 +40,53 @@ const mountPage = (overrides: Record<string, unknown> = {}) => mount(Show, { pro
 
 describe('Oversea Dede file exchange workbench', () => {
   beforeEach(() => { routerPost.mockClear(); routerPatch.mockClear(); routerVisit.mockClear() })
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('reports 422 Germany export field validation in GlobalFeedbackIsland without navigation', async () => {
+    const deWarehouse = { key:'de-tianyun', id:3, code:'DE', label:'德国天运仓', carrier:'DHL', url:'/logistics/oversea/de-tianyun' }
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok:false, status:422,
+      json: async () => ({ message:'订单 007erp-0920-c40888 缺少电话，不能导出仓库文件。' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountPage({ warehouseKey:'de-tianyun', warehouse:deWarehouse, trackingImportPreview:null })
+    await wrapper.get('a[href="/logistics/oversea/de-tianyun/export"]').trigger('click')
+    await flushPromises()
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/logistics/oversea/de-tianyun/export',
+      expect.objectContaining({ credentials:'same-origin', headers:expect.objectContaining({ Accept:'application/json' }) }),
+    )
+    expect(globalFeedback.value.state).toBe('BLOCKED')
+    expect(globalFeedback.value.message).toContain('007erp-0920-c40888 缺少电话')
+    expect(wrapper.get('a[href="/logistics/oversea/de-tianyun/export"]').exists()).toBe(true)
+  })
+
+  it('downloads a validated WMS spreadsheet with the server filename and success feedback', async () => {
+    const blob = new Blob(['xlsx bytes'], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok:true, status:200,
+      headers: new Headers({
+        'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'content-disposition':'attachment; filename="007-us-moreplus-orders-261026.xlsx"',
+      }),
+      blob: async () => blob,
+    }))
+    Object.defineProperty(URL, 'createObjectURL', { configurable:true, value:vi.fn(() => 'blob:test-warehouse') })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable:true, value:vi.fn() })
+    let filename = ''
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function(this: HTMLAnchorElement) {
+      filename = this.download
+    })
+    const wrapper = mountPage()
+    await wrapper.get('a[href="/logistics/oversea/us-moreplus/export"]').trigger('click')
+    await flushPromises()
+    expect(filename).toBe('007-us-moreplus-orders-261026.xlsx')
+    expect(globalFeedback.value.state).toBe('SUCCESS')
+    expect(globalFeedback.value.message).toContain(filename)
+    click.mockRestore()
+  })
+
+
 
   it('exposes the real XLSX round-trip flow and provider evidence', () => {
     const wrapper = mountPage()
