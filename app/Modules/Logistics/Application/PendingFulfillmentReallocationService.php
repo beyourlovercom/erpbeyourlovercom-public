@@ -6,6 +6,7 @@ use App\Modules\Audit\Application\AuditActor;
 use App\Modules\Audit\Application\AuditSource;
 use App\Modules\Audit\Application\Contracts\AuditRecorder;
 use App\Modules\Inventory\Infrastructure\Models\Warehouse;
+use App\Modules\Inventory\Infrastructure\Models\InventoryReservation;
 use App\Modules\Logistics\Infrastructure\Models\FulfillmentAllocation;
 use App\Modules\Orders\Infrastructure\Models\Order;
 use Illuminate\Contracts\Auth\Authenticatable;
@@ -31,6 +32,13 @@ final class PendingFulfillmentReallocationService
             abort_unless($child->fulfillment_parent_id !== null && (string) ($child->fulfillment_role ?? '') !== 'replacement', 422, '只有原始拆分履约可以单独调整分仓');
             abort_unless($child->fulfillment_suffix !== null, 422, '履约缺少拆分后缀');
             $this->assertPending($child);
+            // A6: this legacy partial-reallocation action changes the shipment
+            // warehouse only. It must never strand reserved inventory in the
+            // previous warehouse; stock movement requires a separate atomic
+            // release/re-reserve transaction.
+            abort_if(InventoryReservation::query()->where('order_id', $child->getKey())
+                ->whereIn('status', ['reserved', 'committed'])->lockForUpdate()->exists(),
+                409, '该待发货子单已有库存预留或扣减，请先通过库存事务调整分仓。');
 
             $parent = $child->fulfillmentParent;
             abort_unless($parent, 422, '找不到父订单');
