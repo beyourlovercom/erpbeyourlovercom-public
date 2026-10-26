@@ -19,6 +19,7 @@ use Inertia\Inertia;
 use Inertia\Response;
 use InvalidArgumentException;
 use Symfony\Component\HttpFoundation\Response as HttpResponse;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 
 final class OverseaWarehouseController
 {
@@ -97,8 +98,22 @@ final class OverseaWarehouseController
         $this->applyView($shipments, 'pending');
         try {
             $file = $this->outboundFiles->export($warehouse, $shipments->latest('id')->get());
-        } catch (DomainException|InvalidArgumentException $e) {
-            abort(422, $e->getMessage());
+        } catch (DomainException|InvalidArgumentException|HttpExceptionInterface $e) {
+            // The provider export validation deliberately fails closed. Surface the
+            // offending order/field without replacing the error with a 500 page.
+            if ($e instanceof HttpExceptionInterface && $e->getStatusCode() !== 422) {
+                throw $e;
+            }
+            $reason = trim($e->getMessage()) ?: '待发货订单未通过仓库导出校验。';
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'code' => 'OVERSEA_EXPORT_BLOCKED',
+                    'message' => $reason,
+                ], 422);
+            }
+
+            return redirect("/logistics/oversea/{$warehouse}?view=pending")
+                ->with('error', "仓库下单表无法导出：{$reason}");
         }
 
         return response($file['bytes'], 200, [
