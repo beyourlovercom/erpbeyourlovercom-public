@@ -209,22 +209,76 @@ const currencyOptions = computed(() => {
 })
 
 type AmendmentPreview = {
-  changed:boolean; can_save_direct:boolean; requires_replan:boolean; no_writes:boolean;
+  changed:boolean; can_save_direct:boolean; requires_replan:boolean; can_atomic_single_replan:boolean; expected_revision:string; no_writes:boolean;
   old_items_gross:string; new_items_gross:string; gross_delta:string; currency:string;
   rows:{order_item_id:number|null; operation:string; before:{sku:string|null;quantity:number}|null; after:{sku:string;quantity:number}|null}[];
   issues:string[];
-  stock_by_warehouse:{warehouse_id:number; warehouse_name:string; single_warehouse_candidate:boolean;
+  stock_by_warehouse:{warehouse_id:number; warehouse_name:string; warehouse_code:string; single_warehouse_candidate:boolean;
     details:{product_id:number;required:number;available:number|null;enough:boolean}[]}[];
   inventory_note:string;
 }
 const amendmentPreview = ref<AmendmentPreview|null>(null)
 const amendmentPreviewLoading = ref(false)
 const amendmentPreviewError = ref('')
+const amendmentReplanWarehouse = ref('')
+const amendmentReplanReason = ref('')
+const amendmentReplanApproved = ref(false)
+const amendmentReplanSaving = ref(false)
+const commitAtomicReplan = async () => {
+  const preview = amendmentPreview.value
+  if (!preview?.can_atomic_single_replan || amendmentReplanSaving.value) return
+  if (!amendmentReplanApproved.value || amendmentReplanReason.value.trim().length < 4 || !amendmentReplanWarehouse.value) {
+    amendmentPreviewError.value = '请选择目标仓库、填写客户变更原因并勾选确认。'
+    return
+  }
+  const target = preview.stock_by_warehouse.find(
+    wh => wh.warehouse_code === amendmentReplanWarehouse.value && wh.single_warehouse_candidate,
+  )
+  if (!target) {
+    amendmentPreviewError.value = '所选仓库没有可用库存或状态已失效，请重新预检。'
+    return
+  }
+  amendmentReplanSaving.value = true
+  amendmentPreviewError.value = ''
+  publishGlobalFeedback({state:'RUNNING',title:'正在更新订单与库存预留',
+    message:'订单商品、分仓与预留将作为一次事务提交；发生冲突会全部回滚。'})
+  try {
+    await axios.post(`${basePath.value}/${props.order.id}/items/replan`, {
+      items:form.items.map(item => ({
+        id:item.id, product_id:item.product_id, product_summary:item.product_summary,
+        quantity:item.quantity, unit_price:item.unit_price,
+      })),
+      assignments:form.items.map((_,index) => ({
+        item_index:index, source_code:target.warehouse_code,
+      })),
+      expected_revision:preview.expected_revision,
+      reason:amendmentReplanReason.value.trim(),
+    })
+    publishGlobalFeedback({state:'SUCCESS',title:'单仓商品及库存重规划完成',
+      message:'旧库存预留已释放、新库存预留已建立，物流仍待人工确认后发货。'})
+    amendmentPreview.value = null
+    amendmentReplanApproved.value = false
+    editMode.value = false
+    router.reload({preserveScroll:true})
+  } catch (error) {
+    const payload = axios.isAxiosError(error)
+      ? error.response?.data as {message?:string;errors?:Record<string,string[]>}|undefined : undefined
+    amendmentPreviewError.value = Object.values(payload?.errors ?? {}).flat()[0]
+      || payload?.message || '事务未完成，订单和旧库存预留保持不变，请重新预检。'
+    publishGlobalFeedback({state:'BLOCKED',title:'库存重规划未成功',message:amendmentPreviewError.value,
+      next:'请重新检查订单、库存和发货仓库；未完成的事务不会产生部分发货。'})
+    amendmentPreview.value = null
+  } finally {
+    amendmentReplanSaving.value = false
+  }
+}
 const previewItemAmendment = async () => {
   if (amendmentPreviewLoading.value) return
   amendmentPreviewLoading.value = true
   amendmentPreview.value = null
   amendmentPreviewError.value = ''
+  amendmentReplanApproved.value = false
+  amendmentReplanWarehouse.value = ''
   try {
     const response = await axios.post<AmendmentPreview>(
       `${basePath.value}/${props.order.id}/items/preview`,
@@ -290,6 +344,7 @@ const cancelEdit = () => {
   form.clearErrors()
   amendmentPreview.value = null
   amendmentPreviewError.value = ''
+  amendmentReplanApproved.value = false
   editMode.value = false
 }
 
@@ -995,6 +1050,30 @@ const submitReplacement = () => {
                 {{ wh.warehouse_name }}：{{ wh.single_warehouse_candidate ? '全部 SKU 当前库存满足' : '存在缺货、未确认库存或不支持自动分配' }}
               </p>
               <small>{{ amendmentPreview.inventory_note }}</small>
+              <div v-if="amendmentPreview.can_atomic_single_replan && canEditOrder && canOperateLogistics" class="ord-replan-approval">
+                <strong>A5 单仓库存原子重规划</strong>
+                <p>此操作只调整订单商品、待发货分仓和库存预留；不会发货，也不会自动修改 Woo 或收退款。</p>
+                <label class="erp-form-label">新的发货仓库
+                  <select v-model="amendmentReplanWarehouse" class="erp-select">
+                    <option value="">请明确选择目标仓库</option>
+                    <option v-for="wh in amendmentPreview.stock_by_warehouse.filter(w => w.single_warehouse_candidate)"
+                      :key="wh.warehouse_id" :value="wh.warehouse_code">{{ wh.warehouse_name }}</option>
+                  </select>
+                </label>
+                <label class="erp-form-label">商品变更原因
+                  <textarea v-model="amendmentReplanReason" class="erp-textarea" rows="2"
+                    placeholder="填写与客户沟通后的具体 SKU、颜色或数量调整原因" />
+                </label>
+                <label class="ord-replan-consent">
+                  <input v-model="amendmentReplanApproved" type="checkbox">
+                  我已确认客户修改要求，允许一次性释放旧预留并在所选仓库重新预留。
+                </label>
+                <button type="button" class="erp-btn erp-btn-primary"
+                  :disabled="amendmentReplanSaving || !amendmentReplanApproved || !amendmentReplanWarehouse || amendmentReplanReason.trim().length < 4"
+                  @click="commitAtomicReplan">
+                  {{ amendmentReplanSaving ? '正在原子提交…' : '确认商品变更并重新预留库存' }}
+                </button>
+              </div>
             </section>
           </template>
         </div>
@@ -1354,6 +1433,11 @@ const submitReplacement = () => {
 .ord-amendment-preview p { margin:5px 0; font-size:12px; }
 .ord-amendment-preview strong { display:block; margin:8px 0; font-size:13px; }
 .ord-amendment-diff { font-size:12px; padding:5px 0; border-bottom:1px solid #e7e7e7; }
+.ord-replan-approval { margin-top:14px; padding-top:12px; border-top:1px solid #d1e3de; display:grid; gap:10px; }
+.ord-replan-approval label { display:grid; gap:6px; font-size:12px; }
+.ord-replan-approval .ord-replan-consent { display:flex; align-items:start; gap:8px; }
+.ord-replan-approval .ord-replan-consent input { margin-top:3px; }
+
 
 .ord-item-row {
   display: grid;
