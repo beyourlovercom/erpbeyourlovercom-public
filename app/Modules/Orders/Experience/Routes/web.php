@@ -28,6 +28,7 @@ Route::middleware(['web', 'auth'])->group(function (): void {
     Route::get('/customers/orders/{order}', [OrderController::class, 'show'])->middleware('can:orders.view')->where('order', '[A-Z]{3}-[0-9]{8}-[A-Z0-9]{6}|[0-9]+')->name('customers.orders.show')->defaults('order_kind', 'customer');
     Route::post('/customers/orders/{order}/items/preview', [OrderController::class, 'previewItemAmendment'])->middleware('can:orders.edit')->whereNumber('order')->name('orders.items.preview.customers')->defaults('order_kind', 'customer');
     Route::post('/customers/orders/{order}/items/replan', [OrderController::class, 'commitItemReplan'])->middleware('can:orders.edit')->whereNumber('order')->name('orders.items.replan.customers')->defaults('order_kind', 'customer');
+    Route::post('/customers/orders/{order}/items/replan-multi', [OrderController::class, 'commitMultiItemReplan'])->middleware('can:orders.edit')->whereNumber('order')->name('orders.items.replan-multi.customers')->defaults('order_kind', 'customer');
     Route::patch('/customers/orders/{order}', [OrderController::class, 'update'])->middleware('can:orders.edit')->where('order', '[A-Z]{3}-[0-9]{8}-[A-Z0-9]{6}|[0-9]+')->name('orders.update.customers')->defaults('order_kind', 'customer');
 
     Route::get('/kol/logistics', [KolLogisticsController::class, 'index'])->middleware('can:kol.view')->name('kol.logistics');
@@ -37,5 +38,6 @@ Route::middleware(['web', 'auth'])->group(function (): void {
     Route::get('/kol/orders/{order}', [OrderController::class, 'show'])->middleware('can:orders.view')->where('order', '[A-Z]{3}-[0-9]{8}-[A-Z0-9]{6}|KOL[0-9]{8}-[0-9]{3}|[0-9]+')->name('kol.orders.show')->defaults('order_kind', 'kol_fulfillment');
     Route::post('/kol/orders/{order}/items/preview', [OrderController::class, 'previewItemAmendment'])->middleware('can:orders.edit')->whereNumber('order')->name('orders.items.preview.kol')->defaults('order_kind', 'kol_fulfillment');
     Route::post('/kol/orders/{order}/items/replan', [OrderController::class, 'commitItemReplan'])->middleware('can:orders.edit')->whereNumber('order')->name('orders.items.replan.kol')->defaults('order_kind', 'kol_fulfillment');
+    Route::post('/kol/orders/{order}/items/replan-multi', [OrderController::class, 'commitMultiItemReplan'])->middleware('can:orders.edit')->whereNumber('order')->name('orders.items.replan-multi.kol')->defaults('order_kind', 'kol_fulfillment');
     Route::patch('/kol/orders/{order}', [OrderController::class, 'update'])->middleware('can:orders.edit')->name('orders.update')->defaults('order_kind', 'kol_fulfillment');
 });
