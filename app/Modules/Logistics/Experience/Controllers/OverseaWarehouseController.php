@@ -155,7 +155,7 @@ final class OverseaWarehouseController
 
         try {
             $file = $confirmed
-                ? $this->outboundFiles->exportReviewed($warehouse, $plan['valid'], $plan['issues'])
+                ? $this->outboundFiles->exportReviewed($warehouse, $plan['valid'])
                 : $this->outboundFiles->export($warehouse, $shipments);
         } catch (DomainException|InvalidArgumentException|HttpExceptionInterface $e) {
             // The provider export validation deliberately fails closed. Surface the
