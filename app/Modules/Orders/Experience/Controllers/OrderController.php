@@ -18,6 +18,7 @@ use App\Modules\Orders\Application\OrderKind;
 use App\Modules\Orders\Application\OrderPackagingReferenceProjection;
 use App\Modules\Orders\Application\OrderService;
 use App\Modules\Orders\Application\OrderItemAmendmentPreviewService;
+use App\Modules\Orders\Application\OrderItemAtomicReplanService;
 use App\Modules\Orders\Application\OrderSourceType;
 use App\Modules\Orders\Infrastructure\Models\Order;
 use Illuminate\Http\JsonResponse;
@@ -312,6 +313,28 @@ final class OrderController
                 'errors' => $e->errors(),
             ], 422);
         }
+    }
+
+    /** A5 explicit operator decision; transaction remains in application service. */
+    public function commitItemReplan(Request $request, Order $order, OrderItemAtomicReplanService $replans): JsonResponse
+    {
+        $this->authorizeKind($request, $order);
+        KolOrderAccessScope::authorize($request->user(), $order);
+        $validated = $request->validate([
+            ...$this->updateRules($order),
+            'items' => ['required', 'array', 'min:1'],
+            'assignments' => ['required', 'array', 'min:1'],
+            'assignments.*.item_index' => ['required', 'integer', 'min:0'],
+            'assignments.*.source_code' => ['required', 'string', 'max:24'],
+            'assignments.*.carrier' => ['sometimes', 'nullable', 'string', 'max:128'],
+            'assignments.*.service' => ['sometimes', 'nullable', 'string', 'max:128'],
+            'expected_revision' => ['required', 'string', 'size:64'],
+            'reason' => ['required', 'string', 'min:4', 'max:500'],
+        ]);
+        return response()->json($replans->commit(
+            $order, $validated['items'], $validated['assignments'],
+            $validated['expected_revision'], $validated['reason'], $request->user(),
+        ));
     }
 
     public function update(Request $request, Order $order): RedirectResponse
