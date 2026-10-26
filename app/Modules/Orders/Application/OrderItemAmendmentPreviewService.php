@@ -114,7 +114,11 @@ final class OrderItemAmendmentPreviewService
         $hasActiveReservation = $reservations->isNotEmpty();
         $issues = [];
         if ($actuallyStarted) $issues[] = '订单或部分履约已进入实际物流，不能修改已发货商品，请使用补发或售后流程。';
-        if ($order->source_type === OrderSourceType::WooCommerce) $issues[] = 'WooCommerce 商品变更需先建立官网与 ERP 一致性契约。';
+        $externalOrder = ! in_array($order->source_type, [OrderSourceType::Manual, OrderSourceType::ManualOther], true)
+            || $order->externalReferences()->where('provider', 'woocommerce')->exists();
+        $financialized = $order->financials()->exists() || $order->costEntries()->exists();
+        if ($externalOrder) $issues[] = '外部商城来源商品变更需先建立官网与 ERP 一致性契约。';
+        if ($financialized) $issues[] = '订单已有财务成本或结算记录，需先完成财务调整契约。';
         if ($order->fulfillment_parent_id !== null) $issues[] = '衍生履约订单不能直接修改商品，请操作原订单。';
         if ($order->procurementOrder()->exists()) $issues[] = '订单已关联采购单，需先处理采购影响。';
         if ($linked) $issues[] = '现有分仓/拆单需要重新审核并重建，不得直接复用旧分仓。';
@@ -152,7 +156,7 @@ final class OrderItemAmendmentPreviewService
         }
 
         $singleAtomicEligible = $changed
-            && $order->source_type !== OrderSourceType::WooCommerce
+            && ! $externalOrder && ! $financialized
             && $order->fulfillment_parent_id === null
             && $order->order_status?->value === 'pending_shipment'
             && ! $actuallyStarted
