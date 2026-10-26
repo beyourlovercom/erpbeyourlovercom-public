@@ -389,6 +389,41 @@ final class OverseaWarehouseWorkbenchTest extends TestCase
         $this->assertSame('客户参考号', $rows[0][0]);
     }
 
+    public function test_all_records_review_draft_preserves_incomplete_recipient_and_all_eleven_skus(): void
+    {
+        $user = $this->userWith(['logistics.view', 'logistics.operate']);
+        $warehouses = $this->warehouses();
+        $order = $this->orderAt($warehouses['DE'], '007erp-0920-c50999', 'DE');
+        $order->address()->update(['phone' => '', 'city' => '', 'postal_code' => '']);
+        $productId = Product::query()->where('sku', 'REVIEW-SKU')->value('id');
+        for ($i = 2; $i <= 11; $i++) {
+            $order->items()->create([
+                'product_id' => $productId, 'product_summary' => "Product {$i}", 'sku' => "SKU-{$i}", 'quantity' => $i,
+                'unit_price' => '10.00', 'line_revenue' => '10.00',
+            ]);
+        }
+        $this->actingAs($user)->post("/logistics/oversea/orders/{$order->id}/approve")->assertRedirect();
+
+        $preview = $this->actingAs($user)->getJson('/logistics/oversea/de-tianyun/export/preview')
+            ->assertOk()->assertJsonPath('valid_count', 0)->assertJsonPath('issue_count', 1)->json();
+
+        $response = $this->actingAs($user)->get('/logistics/oversea/de-tianyun/export?confirm=1&token='.$preview['token'].'&mode=draft')
+            ->assertOk();
+        $this->assertStringContainsString('review-draft', (string) $response->headers->get('Content-Disposition'));
+        $rows = $this->xlsxRows($response->getContent());
+        $this->assertCount(12, $rows); // 1 header and every single SKU; nothing truncated.
+        $this->assertSame('ERP订单号', $rows[0][0]);
+        $this->assertSame('007erp-0920-c50999', $rows[1][0]);
+        $this->assertSame('', $rows[1][4]); // Actual missing phone, never fabricated.
+        $this->assertSame('REVIEW-SKU', $rows[1][11]);
+        $this->assertSame('SKU-11', $rows[11][11]);
+        $this->assertSame('11', $rows[11][12]);
+        $this->assertStringContainsString('存在问题', $rows[1][14]);
+        $this->assertDatabaseHas('shipments', [
+            'order_id' => $order->id, 'shipment_status' => 'pending', 'tracking_number' => null,
+        ]);
+    }
+
     public function test_pending_moreplus_orders_download_real_xlsx_block_rows(): void
     {
         $user = $this->userWith(['logistics.view', 'logistics.operate']);
