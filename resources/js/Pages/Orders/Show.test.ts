@@ -1,21 +1,28 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
+import { reactive } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
 import Show from './Show.vue'
+import axios from 'axios'
+import { globalFeedback } from '../../lib/globalFeedback'
 import { router } from '@inertiajs/vue3'
+
+vi.mock('axios', () => ({
+  default: { post:vi.fn(), isAxiosError: (value:unknown) => Boolean(value && typeof value === 'object' && 'response' in value) },
+}))
 
 vi.mock('@inertiajs/vue3', () => ({
   Head: { props: ['title'], template: '<title>{{ title }}</title>' },
-  router: { post: vi.fn() },
+  router: { post: vi.fn(), reload: vi.fn() },
   useForm: (initial: Record<string, unknown>) => {
     const data = { ...initial }
-    return {
+    return reactive({
       ...data,
       processing: false,
       errors: {},
       patch: vi.fn(),
       reset: vi.fn(),
       clearErrors: vi.fn(),
-    }
+    })
   },
   usePage: () => ({ url: '/customers/orders/1', props: { auth: { user: { id: 1, name: 'Test', email: 't@t.com' } }, shellNavigation: [] } }),
 }))
@@ -117,7 +124,7 @@ const audit = [
 
 describe('Orders/Show V2', () => {
   it('renders identity strip with order number', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     const strip = wrapper.find('.ord-identity-strip')
     expect(strip.exists()).toBe(true)
     expect(strip.text()).toContain('007-0908-c1')
@@ -126,27 +133,27 @@ describe('Orders/Show V2', () => {
   })
 
   it('shows order kind label in identity strip', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.find('.ord-identity-strip').text()).toContain('客户订单')
   })
 
   it('shows source label in identity strip', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.find('.ord-identity-strip').text()).toContain('手动创建')
   })
 
   it('shows order status label in identity strip', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.find('.ord-identity-strip').text()).toContain('待发货')
   })
 
   it('shows owner in identity strip', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.find('.ord-identity-strip').text()).toContain('Test Owner')
   })
 
   it('does not expose source or technical order numbers in view mode', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.find('.ord-details-disclosure').exists()).toBe(false)
     expect(wrapper.text()).toContain('007-0908-c1')
     expect(wrapper.text()).not.toContain('BIZ-001')
@@ -154,7 +161,7 @@ describe('Orders/Show V2', () => {
   })
 
   it('renders five business cards: fulfillment, order info, address, items, note', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.text()).toContain('履约状态')
     expect(wrapper.text()).toContain('订单信息')
     expect(wrapper.text()).toContain('收件与地址')
@@ -201,6 +208,73 @@ describe('Orders/Show V2', () => {
     expect((selects[0].element as HTMLSelectElement).value).toBe('1')
     expect((selects[1].element as HTMLSelectElement).value).toBe('USPS')
     expect((selects[2].element as HTMLSelectElement).value).toBe('USPS Priority Mail')
+  })
+
+  const shipmentUiProps = {
+    order: { ...baseOrder, shipment: { ...baseOrder.shipment, warehouse_id: 1, carrier: 'USPS', service: 'USPS Priority Mail' } },
+    audit, canOperateLogistics: true,
+    warehouses: [{ id: 1, slug: 'us-la', name: '美西 MorePlus 仓', code: 'US-LA', country_code: 'US' }],
+    carrierOptions: [{ value:'USPS', label:'USPS', default_service_id:101, default_service_value:'USPS Priority Mail',
+      services:[{ id:101, key:'priority_mail', value:'USPS Priority Mail', label:'Priority Mail', name_en:'Priority Mail', name_zh:'优先件' }] }],
+  }
+  const openShippingDialog = async () => {
+    const wrapper = mount(Show, { props:shipmentUiProps })
+    const button = wrapper.get('[data-testid="fulfillment-actions"]').findAll('button').find(b => b.text().includes('履约发货'))
+    await button!.trigger('click')
+    return wrapper
+  }
+
+  it('blocks Chinese tracking before POST with red field text and GlobalFeedbackIsland, preserving entered note', async () => {
+    vi.mocked(router.post).mockClear()
+    const wrapper = await openShippingDialog()
+    const tracking = wrapper.get('.ord-shipment-form input[placeholder="追踪号，可稍后补录"]')
+    const note = wrapper.get('.ord-shipment-note textarea')
+    await tracking.setValue('填写中文查看错误')
+    await note.setValue('这段中文属于物流备注')
+    const confirm = wrapper.findAll('.ord-replacement-actions button').find(b => b.text().includes('确认发货'))
+    await confirm!.trigger('click')
+    expect(router.post).not.toHaveBeenCalled()
+    expect(wrapper.find('.ord-shipment-modal').exists()).toBe(true)
+    expect(wrapper.get('.ord-shipment-field-error').text()).toContain('不能包含中文')
+    expect(tracking.attributes('aria-invalid')).toBe('true')
+    expect((note.element as HTMLTextAreaElement).value).toBe('这段中文属于物流备注')
+    expect(globalFeedback.value.state).toBe('BLOCKED')
+    expect(globalFeedback.value.message).toContain('不能包含中文')
+    await tracking.setValue('00340435069161712046')
+    expect(wrapper.find('.ord-shipment-field-error').exists()).toBe(false)
+  })
+
+  it('accepts valid Tracking with Chinese note and routes server validation back to the red field', async () => {
+    vi.mocked(router.post).mockClear()
+    const wrapper = await openShippingDialog()
+    const tracking = wrapper.get('.ord-shipment-form input[placeholder="追踪号，可稍后补录"]')
+    await tracking.setValue('00340435069161712046')
+    await wrapper.get('.ord-shipment-note textarea').setValue('中文备注允许')
+    const confirm = wrapper.findAll('.ord-replacement-actions button').find(b => b.text().includes('确认发货'))
+    await confirm!.trigger('click')
+    const calls = vi.mocked(router.post).mock.calls
+    expect(calls).toHaveLength(1)
+    expect(calls[0][0]).toBe('/logistics/orders/1/ship')
+    expect(calls[0][1]).toMatchObject({ tracking_number:'00340435069161712046', logistics_note:'中文备注允许' })
+    const options = calls[0][2] as { onError: (errors:Record<string,string>) => void }
+    options.onError({ tracking_number:'追踪号中存在无效字符，请检查。' })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('.ord-shipment-field-error').text()).toContain('无效字符')
+    expect(wrapper.find('.ord-shipment-modal').exists()).toBe(true)
+    expect((wrapper.get('.ord-shipment-form input[placeholder="追踪号，可稍后补录"]').element as HTMLInputElement).value).toBe('00340435069161712046')
+    expect(globalFeedback.value.message).toContain('无效字符')
+  })
+
+  it('blocks invalid Tracking when saving a draft without losing Chinese logistics note', async () => {
+    vi.mocked(router.post).mockClear()
+    const wrapper = await openShippingDialog()
+    await wrapper.get('.ord-shipment-form input[placeholder="追踪号，可稍后补录"]').setValue('含有中文')
+    await wrapper.get('.ord-shipment-note textarea').setValue('备注中文可保留')
+    const save = wrapper.findAll('.ord-replacement-actions button').find(b => b.text().includes('保存草稿'))
+    await save!.trigger('click')
+    expect(router.post).not.toHaveBeenCalled()
+    expect(wrapper.get('.ord-shipment-field-error').text()).toContain('中文')
+    expect((wrapper.get('.ord-shipment-note textarea').element as HTMLTextAreaElement).value).toBe('备注中文可保留')
   })
 
   it('offers direct fulfillment execution on a pending single order', async () => {
@@ -292,13 +366,13 @@ describe('Orders/Show V2', () => {
   })
 
   it('does not introduce a delete action', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.text()).not.toContain('删除订单')
     expect(wrapper.text()).not.toContain('Danger Zone')
   })
 
   it('shows 返回列表 link for customers', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.find('a[href="/customers/orders"]').exists()).toBe(true)
   })
 
@@ -343,14 +417,14 @@ describe('Orders/Show V2', () => {
   // View Mode tests
   it('shows ISO currency beside every item unit price', () => {
     const eurOrder = { ...baseOrder, currency: 'EUR', items: [{ ...baseOrder.items[0], unit_price: '29.00' }] }
-    const wrapper = mount(Show, { props: { order: eurOrder, audit } })
+    const wrapper = mount(Show, { props: { order: eurOrder, audit, canEditOrder: true } })
     expect(wrapper.text()).toContain('订单币种')
     expect(wrapper.text()).toContain('EUR 29.00')
   })
 
   it('Edit Mode exposes the canonical order currency selector', async () => {
     const eurOrder = { ...baseOrder, currency: 'EUR' }
-    const wrapper = mount(Show, { props: { order: eurOrder, audit } })
+    const wrapper = mount(Show, { props: { order: eurOrder, audit, canEditOrder: true } })
     const editBtn = wrapper.findAll('button[type="button"]').find(b => b.text() === '编辑订单')
     await editBtn!.trigger('click')
     const selects = wrapper.findAll('select')
@@ -359,39 +433,196 @@ describe('Orders/Show V2', () => {
   })
 
   it('defaults to View Mode: no active submit button', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.find('button[type="submit"]').exists()).toBe(false)
   })
 
+  it('preflights proposed item changes, displaying stock comparison without writing an order', async () => {
+    vi.mocked(axios.post).mockClear()
+    vi.mocked(axios.post).mockResolvedValueOnce({ data: {
+      changed:true, can_save_direct:false, requires_replan:true, no_writes:true,
+      old_items_gross:'39.98', new_items_gross:'79.96', gross_delta:'39.98', currency:'USD',
+      rows:[{ order_item_id:10, operation:'update',
+        before:{ sku:'SKU-001', quantity:2 }, after:{ sku:'SKU-001', quantity:4 } }],
+      issues:['当前分仓需要重建'],
+      stock_by_warehouse:[{ warehouse_id:1, warehouse_name:'美西 MorePlus 仓',
+        single_warehouse_candidate:false, details:[] }],
+      inventory_note:'只读库存快照',
+    }})
+    const wrapper = mount(Show, { props:{ order:baseOrder, audit, canEditOrder:true } })
+    await wrapper.findAll('button').find(b => b.text() === '编辑订单')!.trigger('click')
+    const qty = wrapper.get('.ord-item-row input[type="number"][min="1"]')
+    await qty.setValue('4')
+    const check = wrapper.findAll('button').find(b => b.text().includes('检查 SKU、库存与分仓影响'))
+    await check!.trigger('click')
+    await flushPromises()
+    expect(axios.post).toHaveBeenCalledWith('/customers/orders/1/items/preview', expect.objectContaining({
+      items:[expect.objectContaining({ id:10, quantity:4 })],
+    }))
+    expect(wrapper.get('.ord-amendment-preview').text()).toContain('当前分仓需要重建')
+    expect(wrapper.get('.ord-amendment-preview').text()).toContain('39.98')
+    expect(wrapper.get('.ord-amendment-preview').text()).toContain('美西 MorePlus 仓')
+    expect(globalFeedback.value.state).toBe('BLOCKED')
+    expect(wrapper.find('.ord-item-row').exists()).toBe(true)
+  })
+
+  it('requires explicit approval and expected revision for single-warehouse atomic replan', async () => {
+    vi.mocked(axios.post).mockClear()
+    vi.mocked(router.reload).mockClear()
+    vi.mocked(axios.post)
+      .mockResolvedValueOnce({data:{
+        changed:true, can_save_direct:false, requires_replan:true, can_atomic_single_replan:true,
+        expected_revision:'a'.repeat(64), no_writes:true, old_items_gross:'39.98',
+        new_items_gross:'59.97', gross_delta:'19.99', currency:'USD',
+        rows:[{ order_item_id:10, operation:'update',
+          before:{sku:'SKU-001',quantity:2}, after:{sku:'SKU-001',quantity:3} }],
+        issues:['库存需要重规划'],
+        stock_by_warehouse:[{warehouse_id:1,warehouse_code:'US-LA',
+          warehouse_name:'美西 MorePlus 仓',single_warehouse_candidate:true,details:[]}],
+        inventory_note:'仅为库存快照',
+      }})
+      .mockResolvedValueOnce({data:{order_id:1,new_reservation_id:25,warehouse_id:1}})
+    const wrapper = mount(Show, { props:{
+      order:baseOrder, audit, canEditOrder:true, canOperateLogistics:true,
+    } })
+    await wrapper.findAll('button').find(b => b.text() === '编辑订单')!.trigger('click')
+    await wrapper.get('.ord-item-row input[type="number"][min="1"]').setValue('3')
+    await wrapper.findAll('button').find(b => b.text().includes('检查 SKU、库存与分仓影响'))!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.ord-replan-approval').text()).toContain('单仓库存原子重规划')
+    const confirm = wrapper.get('.ord-replan-approval button')
+    expect(confirm.attributes('disabled')).toBeDefined()
+    expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(1)
+    await wrapper.get('.ord-replan-approval select').setValue('US-LA')
+    await wrapper.get('.ord-replan-approval textarea').setValue('Customer approved blue color')
+    await wrapper.get('.ord-replan-approval input[type="checkbox"]').setValue(true)
+    await confirm.trigger('click')
+    await flushPromises()
+    expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(axios.post)).toHaveBeenLastCalledWith(
+      '/customers/orders/1/items/replan', expect.objectContaining({
+        expected_revision:'a'.repeat(64),
+        reason:'Customer approved blue color',
+        assignments:[{item_index:0,source_code:'US-LA'}],
+      }),
+    )
+    expect(globalFeedback.value.state).toBe('SUCCESS')
+    expect(router.reload).toHaveBeenCalledWith()
+  })
+
+  it('requires per-item warehouse choices and explicit consent for A5-B multi-warehouse replan', async () => {
+    vi.mocked(axios.post).mockReset()
+    vi.mocked(router.reload).mockClear()
+    vi.mocked(axios.post)
+      .mockResolvedValueOnce({data:{
+        changed:true, can_save_direct:false, can_atomic_single_replan:false,
+        can_atomic_multi_replan:true, requires_replan:true, no_writes:true,
+        expected_revision:'b'.repeat(64), old_items_gross:'39.98',
+        new_items_gross:'69.97', gross_delta:'29.99', currency:'USD',
+        rows:[{order_item_id:11,operation:'update',
+          before:{sku:'SKU-B',quantity:1},after:{sku:'SKU-B',quantity:3}}],
+        issues:['多仓子履约需要重新确认'],
+        stock_by_warehouse:[
+          {warehouse_id:1,warehouse_code:'US-LA',warehouse_name:'美西仓',
+            single_warehouse_candidate:false,
+            details:[{product_id:5,required:2,available:10,enough:true},
+              {product_id:22,required:3,available:0,enough:false}]},
+          {warehouse_id:2,warehouse_code:'US-SM',warehouse_name:'世迈仓',
+            single_warehouse_candidate:false,
+            details:[{product_id:5,required:2,available:0,enough:false},
+              {product_id:22,required:3,available:8,enough:true}]},
+        ],
+        inventory_note:'只读库存',
+      }})
+      .mockResolvedValueOnce({data:{parent_order_id:1,new_reservations:[{order_id:11},{order_id:12}]}})
+    const order = {...baseOrder,items:[
+      ...baseOrder.items,
+      {id:11,product_id:22,product_summary:'Product B',sku:'SKU-B',quantity:1,unit_price:'29.99'},
+    ]}
+    const wrapper = mount(Show, {props:{order,audit,canEditOrder:true,canOperateLogistics:true}})
+    await wrapper.findAll('button').find(b=>b.text()==='编辑订单')!.trigger('click')
+    await wrapper.findAll('.ord-item-row input[type="number"][min="1"]')[1].setValue('3')
+    await wrapper.findAll('button').find(b=>b.text().includes('检查 SKU、库存与分仓影响'))!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.ord-multi-replan-approval').text()).toContain('多仓库存原子重规划')
+    const confirm = wrapper.get('.ord-multi-replan-approval button')
+    expect(confirm.attributes('disabled')).toBeDefined()
+    expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(1)
+    const selects=wrapper.findAll('.ord-multi-replan-approval select')
+    await selects[0].setValue('US-LA')
+    await selects[1].setValue('US-SM')
+    await wrapper.get('.ord-multi-replan-approval textarea').setValue('Customer confirmed replacement colors')
+    await wrapper.get('.ord-multi-replan-approval input[type="checkbox"]').setValue(true)
+    await confirm.trigger('click')
+    await flushPromises()
+    expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(axios.post)).toHaveBeenLastCalledWith(
+      '/customers/orders/1/items/replan-multi',expect.objectContaining({
+        expected_revision:'b'.repeat(64),
+        assignments:[
+          {item_index:0,source_code:'US-LA'},
+          {item_index:1,source_code:'US-SM'},
+        ],
+      }),
+    )
+    expect(globalFeedback.value.state).toBe('SUCCESS')
+    expect(router.reload).toHaveBeenCalledWith()
+  })
+
+  it('does not show the order edit entry to a user without orders.edit', () => {
+    const wrapper = mount(Show, { props:{ order:baseOrder, audit, canEditOrder:false } })
+    expect(wrapper.findAll('button').some(b => b.text() === '编辑订单')).toBe(false)
+  })
+
+  it('allows adding and removing a zero-price gift SKU line in edit mode', async () => {
+    const wrapper = mount(Show, { props:{ order:baseOrder, audit, canEditOrder:true } })
+    const edit = wrapper.findAll('button').find(b => b.text() === '编辑订单')
+    await edit!.trigger('click')
+    const addButton = wrapper.findAll('button').find(b => b.text().includes('增加商品 / 赠品'))
+    await addButton!.trigger('click')
+    // The test's lightweight useForm mock is a plain object (not Inertia's
+    // reactive useForm); explicitly request a render after its array mutation.
+    wrapper.vm.$forceUpdate()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findAll('.ord-item-row')).toHaveLength(2)
+    const rows = wrapper.findAll('.ord-item-row')
+    expect((rows[1].find('input[type="number"][min="0"]').element as HTMLInputElement).value).toBe('0.00')
+    const removeButton = rows[1].findAll('button').find(b => b.text() === '删除商品')
+    await removeButton!.trigger('click')
+    wrapper.vm.$forceUpdate()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findAll('.ord-item-row')).toHaveLength(1)
+  })
+
   it('defaults to View Mode: 编辑订单 button is visible', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     const editBtn = wrapper.findAll('button[type="button"]').find(b => b.text() === '编辑订单')
     expect(editBtn).toBeTruthy()
   })
 
   it('defaults to View Mode: no active date input', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.find('input[type="date"]').exists()).toBe(false)
   })
 
   it('defaults to View Mode: no active textarea for note', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.find('textarea').exists()).toBe(false)
   })
 
   it('defaults to View Mode: no SKU combobox visible', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.find('.sku-combobox-stub').exists()).toBe(false)
   })
 
   it('defaults to View Mode: 保存订单 action not shown', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.text()).not.toContain('保存订单')
   })
 
   // Edit Mode tests
   it('clicking 编辑订单 enters Edit Mode: shows 保存订单 and 取消编辑', async () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     const editBtn = wrapper.findAll('button[type="button"]').find(b => b.text() === '编辑订单')
     await editBtn!.trigger('click')
     expect(wrapper.text()).toContain('保存订单')
@@ -399,28 +630,28 @@ describe('Orders/Show V2', () => {
   })
 
   it('Edit Mode shows date input', async () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     const editBtn = wrapper.findAll('button[type="button"]').find(b => b.text() === '编辑订单')
     await editBtn!.trigger('click')
     expect(wrapper.find('input[type="date"]').exists()).toBe(true)
   })
 
   it('Edit Mode shows textarea for note', async () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     const editBtn = wrapper.findAll('button[type="button"]').find(b => b.text() === '编辑订单')
     await editBtn!.trigger('click')
     expect(wrapper.find('textarea').exists()).toBe(true)
   })
 
   it('Edit Mode shows SKU combobox for items', async () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     const editBtn = wrapper.findAll('button[type="button"]').find(b => b.text() === '编辑订单')
     await editBtn!.trigger('click')
     expect(wrapper.find('.sku-combobox-stub').exists()).toBe(true)
   })
 
   it('clicking 取消编辑 returns to View Mode', async () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     const editBtn = wrapper.findAll('button[type="button"]').find(b => b.text() === '编辑订单')
     await editBtn!.trigger('click')
     const cancelBtn = wrapper.findAll('button[type="button"]').find(b => b.text() === '取消编辑')
@@ -441,7 +672,7 @@ describe('Orders/Show V2', () => {
 
   // Immutable identity always read-only
   it('identity fields are immutable in View Mode (disabled inputs)', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     const disabledInputs = wrapper.findAll('input[disabled]')
     const values = disabledInputs.map(i => (i.element as HTMLInputElement).value)
     expect(values).toContain('007-0908-c1')
@@ -451,7 +682,7 @@ describe('Orders/Show V2', () => {
   })
 
   it('identity fields remain immutable in Edit Mode (disabled inputs)', async () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     const editBtn = wrapper.findAll('button[type="button"]').find(b => b.text() === '编辑订单')
     await editBtn!.trigger('click')
     const disabledInputs = wrapper.findAll('input[disabled]')
@@ -464,36 +695,36 @@ describe('Orders/Show V2', () => {
 
   // ERP V2 VI contract
   it('uses erp-form-page outer container', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.find('.erp-form-page').exists()).toBe(true)
   })
 
   it('uses erp-form-card for section cards', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     const cards = wrapper.findAll('.erp-form-card')
     expect(cards.length).toBeGreaterThanOrEqual(5)
   })
 
   it('uses erp-form-label — no mvp-label class', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.find('.erp-form-label').exists()).toBe(true)
     expect(wrapper.find('.mvp-label').exists()).toBe(false)
   })
 
   it('uses erp-btn — no mvp-button class', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.find('.erp-btn').exists()).toBe(true)
     expect(wrapper.find('.mvp-button').exists()).toBe(false)
   })
 
   it('View Mode shows erp-readonly-input for mutable fields', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     const readonlyDivs = wrapper.findAll('.erp-readonly-input')
     expect(readonlyDivs.length).toBeGreaterThan(0)
   })
 
   it('Edit Mode shows erp-input controls — no mvp-input class', async () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     const editBtn = wrapper.findAll('button[type="button"]').find(b => b.text() === '编辑订单')
     await editBtn!.trigger('click')
     expect(wrapper.find('.mvp-input').exists()).toBe(false)
@@ -502,7 +733,7 @@ describe('Orders/Show V2', () => {
 
   // Fulfillment and audit
   it('shows fulfillment status in fulfillment card', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.text()).toContain('待发货')
   })
 
@@ -517,25 +748,25 @@ describe('Orders/Show V2', () => {
   })
 
   it('does not show reopen button without tracking number', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     const reopenBtn = wrapper.find('[data-testid="fulfillment-actions"]').findAll('button').find(b => b.text().includes('重开发货'))
     expect(reopenBtn).toBeFalsy()
   })
 
   it('shows audit log section', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.text()).toContain('操作审计')
     expect(wrapper.text()).toContain('created')
   })
 
   it('shows address fields labels', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     expect(wrapper.text()).toContain('收件人姓名')
     expect(wrapper.text()).toContain('联系电话')
   })
 
   it('existing item product_id preserved for existing order items', () => {
-    const wrapper = mount(Show, { props: { order: baseOrder, audit } })
+    const wrapper = mount(Show, { props: { order: baseOrder, audit, canEditOrder: true } })
     // item.product_id = 5 from baseOrder — shown in SKU field (view mode shows SKU text)
     expect(wrapper.text()).toContain('SKU-001')
   })

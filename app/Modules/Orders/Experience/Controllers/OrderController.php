@@ -17,11 +17,17 @@ use App\Modules\Orders\Application\KolOrderAccessScope;
 use App\Modules\Orders\Application\OrderKind;
 use App\Modules\Orders\Application\OrderPackagingReferenceProjection;
 use App\Modules\Orders\Application\OrderService;
+use App\Modules\Orders\Application\OrderItemAmendmentPreviewService;
+use App\Modules\Orders\Application\OrderItemAtomicReplanService;
+use App\Modules\Orders\Application\OrderItemMultiWarehouseReplanService;
 use App\Modules\Orders\Application\OrderSourceType;
 use App\Modules\Orders\Infrastructure\Models\Order;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\Validator;
 use Inertia\Inertia;
 use Inertia\Response;
 use Symfony\Component\HttpFoundation\Response as HttpResponse;
@@ -150,6 +156,7 @@ final class OrderController
             'canOperateLogistics' => $this->logisticsExecutionAccess->allows($request->user()),
             'canViewProfit' => $request->user()?->can('analysis.view') ?? false,
             'canMarkOperational' => $request->user()?->can('orders.edit') ?? false,
+            'canEditOrder' => $request->user()?->can('orders.edit') ?? false,
             'canCreateReplacement' => $this->logisticsExecutionAccess->allows($request->user()) && $this->originalLogisticsStarted($order),
             'canCreateProcurement' => ($request->user()?->can('procurement.create') ?? false) && $order->operationalMarkers->contains('marker', 'stockout'),
             'canManageProductPackaging' => $request->user()?->can('products.operate') ?? false,
@@ -281,6 +288,79 @@ final class OrderController
             'can_use_recommendation' => $canUseRecommendation,
             'full_allocation_url' => route('logistics.wait-stock'),
         ];
+    }
+
+    public function previewItemAmendment(Request $request, Order $order, OrderItemAmendmentPreviewService $previews): JsonResponse
+    {
+        $this->authorizeKind($request, $order);
+        KolOrderAccessScope::authorize($request->user(), $order);
+        $validator = Validator::make($request->all(), [
+            ...$this->updateRules($order),
+            'items' => ['required', 'array', 'min:1'],
+        ]);
+        if ($validator->fails()) {
+            return response()->json([
+                'message' => '订单商品存在无效字段，请检查红色提示后重试。',
+                'errors' => $validator->errors()->toArray(),
+            ], 422);
+        }
+        $validated = $validator->validated();
+
+        try {
+            return response()->json($previews->preview($order, $validated['items']));
+        } catch (ValidationException $e) {
+            return response()->json([
+                'message' => '订单商品预检未通过。',
+                'errors' => $e->errors(),
+            ], 422);
+        }
+    }
+
+    /** A5 explicit operator decision; transaction remains in application service. */
+    public function commitItemReplan(Request $request, Order $order, OrderItemAtomicReplanService $replans): JsonResponse
+    {
+        $this->authorizeKind($request, $order);
+        KolOrderAccessScope::authorize($request->user(), $order);
+        $validated = $request->validate([
+            ...$this->updateRules($order),
+            'items' => ['required', 'array', 'min:1'],
+            'assignments' => ['required', 'array', 'min:1'],
+            'assignments.*.item_index' => ['required', 'integer', 'min:0'],
+            'assignments.*.source_code' => ['required', 'string', 'max:24'],
+            'assignments.*.carrier' => ['sometimes', 'nullable', 'string', 'max:128'],
+            'assignments.*.service' => ['sometimes', 'nullable', 'string', 'max:128'],
+            'expected_revision' => ['required', 'string', 'size:64'],
+            'reason' => ['required', 'string', 'min:4', 'max:500'],
+        ]);
+        return response()->json($replans->commit(
+            $order, $validated['items'], $validated['assignments'],
+            $validated['expected_revision'], $validated['reason'], $request->user(),
+        ));
+    }
+
+    /** A5-B: explicit, audited operator request for multi-warehouse atomic replan. */
+    public function commitMultiItemReplan(
+        Request $request,
+        Order $order,
+        OrderItemMultiWarehouseReplanService $replans,
+    ): JsonResponse {
+        $this->authorizeKind($request, $order);
+        KolOrderAccessScope::authorize($request->user(), $order);
+        $validated = $request->validate([
+            ...$this->updateRules($order),
+            'items' => ['required', 'array', 'min:2'],
+            'assignments' => ['required', 'array', 'min:2'],
+            'assignments.*.item_index' => ['required', 'integer', 'min:0'],
+            'assignments.*.source_code' => ['required', 'string', 'max:24'],
+            'assignments.*.carrier' => ['sometimes', 'nullable', 'string', 'max:128'],
+            'assignments.*.service' => ['sometimes', 'nullable', 'string', 'max:128'],
+            'expected_revision' => ['required', 'string', 'size:64'],
+            'reason' => ['required', 'string', 'min:4', 'max:500'],
+        ]);
+        return response()->json($replans->commit(
+            $order, $validated['items'], $validated['assignments'],
+            $validated['expected_revision'], $validated['reason'], $request->user(),
+        ));
     }
 
     public function update(Request $request, Order $order): RedirectResponse
@@ -540,12 +620,14 @@ final class OrderController
             'source_type' => ['sometimes', Rule::in(array_column(OrderSourceType::cases(), 'value'))],
             'order_date' => ['sometimes', 'date'],
             'order_note' => ['sometimes', 'nullable', 'string', 'max:5000'],
+            'amendment_reason' => ['sometimes', 'nullable', 'string', 'max:500'],
             'currency' => ['sometimes', 'required', 'string', 'regex:/^[A-Z]{3}$/'],
             'recipient_name' => ['sometimes', 'nullable', 'string', 'max:255'], 'phone' => ['sometimes', 'nullable', 'string', 'max:64'],
             'country' => ['sometimes', 'nullable', 'string', 'max:128'], 'province_state' => ['sometimes', 'nullable', 'string', 'max:128'],
             'city' => ['sometimes', 'nullable', 'string', 'max:128'], 'address_line_1' => ['sometimes', 'nullable', 'string', 'max:255'],
             'address_line_2' => ['sometimes', 'nullable', 'string', 'max:255'], 'postal_code' => ['sometimes', 'nullable', 'string', 'max:32'],
-            'items' => ['sometimes', 'array', 'min:1'], 'items.*.product_summary' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'items' => ['sometimes', 'array', 'min:1'], 'items.*.id' => ['sometimes', 'nullable', 'integer', Rule::exists('order_items', 'id')->where('order_id', $order->getKey())],
+            'items.*.product_summary' => ['sometimes', 'nullable', 'string', 'max:255'],
             'items.*.product_id' => ['required_with:items', 'integer', Rule::exists('products', 'id')->whereNotNull('sku')->where('sku', '!=', '')],
             'items.*.quantity' => ['required_with:items', 'integer', 'min:1'],
             'items.*.unit_price' => ['required_with:items', 'decimal:0,2', 'min:0'],

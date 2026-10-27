@@ -2,6 +2,7 @@
 
 namespace App\Modules\Logistics\Application;
 
+use App\Modules\Inventory\Infrastructure\Models\InventoryReservation;
 use App\Modules\Orders\Application\OrderKind;
 use App\Modules\Orders\Application\OrderSourceType;
 use App\Modules\Orders\Application\OrderStatus;
@@ -125,6 +126,13 @@ final class FulfillmentDerivedOrderService
     {
         $warehouseId = (int) ($segment['warehouse_id'] ?? 0);
         abort_if($warehouseId <= 0, 422, '履约方案缺少有效仓库');
+        $reservation = InventoryReservation::query()->where('order_id', $order->getKey())
+            ->whereIn('status', ['reserved', 'committed'])->first(['warehouse_id']);
+        abort_if(
+            $reservation && (int) $reservation->warehouse_id !== $warehouseId,
+            409,
+            '目标发货仓库与当前库存预留仓库不同，必须先受控重规划，不得沿用旧预留'
+        );
         $attributes = [
             'warehouse_id' => $warehouseId,
             'warehouse_selection_source' => 'allocation',
@@ -139,6 +147,7 @@ final class FulfillmentDerivedOrderService
 
     private function assertParentShipmentMayBeReplaced(Order $parent): void
     {
+        $this->assertNoActiveReservation($parent);
         $shipment = $parent->shipment;
         if (! $shipment) return;
         abort_if($shipment->shipment_status !== 'pending' || filled($shipment->tracking_number) || $shipment->shipped_at !== null, 409, '原订单已经进入实际物流，不能再拆单');
@@ -146,9 +155,20 @@ final class FulfillmentDerivedOrderService
 
     private function assertChildMayBeRebuilt(Order $child): void
     {
+        $this->assertNoActiveReservation($child);
         $shipment = $child->shipment;
         if (! $shipment) return;
         abort_if($shipment->shipment_status !== 'pending' || filled($shipment->tracking_number) || $shipment->shipped_at !== null, 409, "衍生订单 {$child->erp_order_id} 已进入实际物流，不能重建");
+    }
+
+    private function assertNoActiveReservation(Order $order): void
+    {
+        abort_if(
+            InventoryReservation::query()->where('order_id', $order->getKey())
+                ->whereIn('status', ['reserved', 'committed'])->exists(),
+            409,
+            '订单已有预留或已扣减库存，不能直接重建履约商品；请先使用受控库存重规划流程'
+        );
     }
 
     private function clearPendingChildren(Order $parent): void

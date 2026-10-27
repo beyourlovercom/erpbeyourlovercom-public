@@ -5,6 +5,7 @@ namespace Tests\Feature\Logistics;
 use App\Modules\Identity\Infrastructure\Models\Role;
 use App\Modules\Identity\Infrastructure\Models\User;
 use App\Modules\Inventory\Infrastructure\Models\Warehouse;
+use App\Modules\Inventory\Infrastructure\Models\InventoryReservation;
 use App\Modules\Orders\Infrastructure\Models\Order;
 use App\Modules\Products\Infrastructure\Models\Product;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -45,6 +46,51 @@ final class PendingFulfillmentReallocationTest extends TestCase
         $this->assertSame($target->id, $snapshot['derived_orders'][1]['warehouse_id']);
         $this->assertSame('partial_pending_fulfillment_reallocated', $snapshot['execution_status']);
         $this->assertStringStartsWith('partial:', $allocation->selected_plan_key);
+    }
+
+    public function test_pending_child_with_reserved_stock_cannot_move_warehouse_without_atomic_replan(): void
+    {
+        $user = $this->userWith(['orders.view', 'orders.edit', 'logistics.operate']);
+        [$parent, $a, $b, $target] = $this->splitScenario();
+        $originalWarehouseId = $b->shipment()->value('warehouse_id');
+        InventoryReservation::query()->create([
+            'reservation_key' => 'partial-held-'.$b->id,
+            'payload_hash' => str_repeat('c', 64),
+            'order_id' => $b->id,
+            'warehouse_id' => $originalWarehouseId,
+            'status' => 'reserved',
+        ]);
+
+        $this->actingAs($user)->postJson('/logistics/orders/'.$b->id.'/reallocate-pending-fulfillment', [
+            'warehouse_id' => $target->id,
+            'note' => 'Should be rejected because stock held at old warehouse',
+        ])->assertStatus(409);
+
+        $this->assertSame($originalWarehouseId, $b->shipment()->value('warehouse_id'));
+        $this->assertDatabaseHas('inventory_reservations', [
+            'order_id' => $b->id, 'warehouse_id' => $originalWarehouseId, 'status' => 'reserved',
+        ]);
+        $this->assertSame('FACTORY', $parent->fresh()->fulfillmentAllocation?->plan_snapshot['segments'][1]['source_code']);
+    }
+
+    public function test_pending_child_with_committed_stock_cannot_move_or_rewrite_history(): void
+    {
+        $user = $this->userWith(['orders.view', 'orders.edit', 'logistics.operate']);
+        [$parent, $a, $b, $target] = $this->splitScenario();
+        $warehouseId = $b->shipment()->value('warehouse_id');
+        InventoryReservation::query()->create([
+            'reservation_key' => 'partial-committed-'.$b->id,
+            'payload_hash' => str_repeat('d', 64),
+            'order_id' => $b->id, 'warehouse_id' => $warehouseId, 'status' => 'committed',
+        ]);
+
+        $this->actingAs($user)->postJson('/logistics/orders/'.$b->id.'/reallocate-pending-fulfillment', [
+            'warehouse_id' => $target->id,
+        ])->assertStatus(409);
+        $this->assertSame($warehouseId, $b->shipment()->value('warehouse_id'));
+        $this->assertDatabaseHas('inventory_reservations', [
+            'order_id' => $b->id, 'warehouse_id' => $warehouseId, 'status' => 'committed',
+        ]);
     }
 
     public function test_shipped_child_cannot_be_reallocated(): void
