@@ -120,7 +120,7 @@ final class FulfillmentAllocationDecisionService
             $reasons[] = match ($preview['reason_code'] ?? null) {
                 'missing_country' => '订单国家/地区信息缺失',
                 'unresolved_or_empty_items' => '订单 SKU / Product 数据不完整',
-                'insufficient_stock', 'no_fulfillment_plan' => '现有库存无法形成可靠履约方案',
+                'insufficient_stock', 'no_fulfillment_plan' => '当前区域路由与库存验收条件下无法形成自动候选方案；请参考库存列表核实人工备选仓',
                 default => '系统无法形成可靠履约方案',
             };
         }

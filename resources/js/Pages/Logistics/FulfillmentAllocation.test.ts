@@ -328,4 +328,55 @@ describe('Vita Fulfillment Allocation V1.1', () => {
     expect(wrapper.text()).toContain('已分仓')
     csrf.remove()
   })
+
+  it('shows 27 units of US-SM as a cross-region manual alternative, not green US-NY', async () => {
+    const item = {
+      ...itemA, id: 205, product_id: 205, sku: 'TEST-205', quantity: 2,
+      availability: [
+        { warehouse_id: 2, warehouse_slug: 'us-ny', warehouse_name: '美东纽约', inventory_state: 'confirmed', can_auto_allocate: true, quantity_on_hand: 0, quantity_reserved: 0, quantity_available: 0 },
+        { warehouse_id: 7, warehouse_slug: 'us-3sm', warehouse_name: '美国3世迈仓', inventory_state: 'manual', can_auto_allocate: false, quantity_on_hand: 27, quantity_reserved: 0, quantity_available: 27 },
+      ],
+    }
+    const order = {
+      ...manualOrder, id: 20, country: 'US', province_state: 'VA', postal_code: '24141',
+      us_fulfillment_zone: { status: 'matched', zone: 'east', zone_label: '美东区', postal_code: '24141', zip3: 241, state: 'VA', warehouse_priority: ['US-NY'] },
+      items: [item], item_count: 2,
+    }
+    const wrapper = mountPage({ ...props, orders: { ...props.orders, data: [order], total: 1 }, pendingTotal: 1 })
+    await wrapper.findAll('button').find(b => b.text() === '查看方案')!.trigger('click')
+    await flushPromises()
+    const advice = document.body.querySelector('.primary-allocation .warehouse-advice') as HTMLElement
+    expect(advice.classList.contains('manual')).toBe(true)
+    expect(advice.textContent).toContain('跨区人工备选 · 美国3世迈仓')
+    expect(advice.textContent).toContain('可用 27 件')
+    expect(advice.textContent).toContain('Full Snapshot')
+    expect(advice.textContent).toContain('不是系统自动推荐')
+    expect(document.body.querySelector('.primary-allocation .warehouse-advice.recommended')).toBeNull()
+    expect(document.body.textContent).toContain('区域优先仓（不代表有货）')
+    expect((document.body.querySelector('.primary-allocation tbody select') as HTMLSelectElement).value).toBe('')
+  })
+
+  it('shows no recommendation when all US warehouses are out of stock', async () => {
+    const item = {
+      ...itemA, id: 206, product_id: 206, sku: 'TEST-206', quantity: 2,
+      availability: [
+        { warehouse_id: 2, warehouse_slug: 'us-ny', warehouse_name: '美东纽约', inventory_state: 'confirmed', can_auto_allocate: true, quantity_on_hand: 0, quantity_reserved: 0, quantity_available: 0 },
+        { warehouse_id: 7, warehouse_slug: 'us-3sm', warehouse_name: '美国3世迈仓', inventory_state: 'manual', can_auto_allocate: false, quantity_on_hand: 0, quantity_reserved: 0, quantity_available: 0 },
+      ],
+    }
+    const order = {
+      ...manualOrder, id: 21, country: 'US', province_state: 'VA', postal_code: '24141',
+      us_fulfillment_zone: { status: 'matched', zone: 'east', zone_label: '美东区', postal_code: '24141', zip3: 241, state: 'VA', warehouse_priority: ['US-NY'] },
+      items: [item], item_count: 2,
+    }
+    const wrapper = mountPage({ ...props, orders: { ...props.orders, data: [order], total: 1 }, pendingTotal: 1 })
+    await wrapper.findAll('button').find(b => b.text() === '查看方案')!.trigger('click')
+    await flushPromises()
+    const advice = document.body.querySelector('.primary-allocation .warehouse-advice') as HTMLElement
+    expect(advice.classList.contains('none')).toBe(true)
+    expect(advice.textContent).toContain('无有效推荐')
+    expect(advice.textContent).not.toContain('美东纽约')
+    expect(document.body.querySelector('.primary-allocation .warehouse-advice.recommended')).toBeNull()
+  })
+
 })
