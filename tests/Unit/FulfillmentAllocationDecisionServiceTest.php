@@ -89,6 +89,22 @@ final class FulfillmentAllocationDecisionServiceTest extends TestCase
         self::assertContains('部分候选方案成本数据不足', $decision['manual_reasons']);
     }
 
+    public function test_blocked_east_zone_does_not_claim_all_warehouses_are_out_of_stock(): void
+    {
+        $decision = app(FulfillmentAllocationDecisionService::class)->present($this->order(), [
+            'status' => 'blocked',
+            'reason_code' => 'insufficient_stock',
+            'comparison' => ['status' => 'not_evaluated_missing_weight'],
+            'fallback_policy' => ['mode' => 'inventory_only_missing_weight'],
+            'plans' => [],
+        ]);
+
+        self::assertSame('manual_review', $decision['status']);
+        self::assertNull($decision['recommended_plan']);
+        self::assertFalse($decision['can_use_recommendation']);
+        self::assertContains('当前区域路由与库存验收条件下无法形成自动候选方案；请参考库存列表核实人工备选仓', $decision['manual_reasons']);
+    }
+
     private function order(bool $twoItems = false): Order
     {
         $order = new Order();
