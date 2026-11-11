@@ -129,7 +129,7 @@ final class DomesticLogisticsController
     {
         $factory = $this->factory();
         $orders = $this->baseQuery((int) $factory->id)
-            ->with(['address', 'items.product', 'shipment', 'externalReferences', 'operationalMarkers'])
+            ->with(['address', 'items.product', 'shipment', 'externalReferences', 'operationalMarkers', 'financials'])
             ->whereHas('operationalMarkers', fn ($q) => $q->where('marker', self::REVIEW_MARKER))
             ->whereHas('shipment', fn ($q) => $q->where('shipment_status', 'pending'))
             ->orderBy('order_date')

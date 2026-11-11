@@ -165,6 +165,12 @@ final class DomesticLogisticsProductionClosureTest extends TestCase
             self::assertSame('承运商', $sheet->getCell('C1')->getValue());
             self::assertSame('Tracking', $sheet->getCell('E1')->getValue());
             self::assertSame('Email', $sheet->getCell('H1')->getValue());
+            self::assertSame('SKU', $sheet->getCell('N1')->getValue());
+            self::assertSame('数量', $sheet->getCell('O1')->getValue());
+            self::assertSame('金额', $sheet->getCell('P1')->getValue());
+            self::assertSame('物流备注', $sheet->getCell('Q1')->getValue());
+            self::assertSame('1', $sheet->getCell('O2')->getValue());
+            self::assertSame('2', $sheet->getCell('O3')->getValue());
             self::assertSame('007-0923-c50101', $sheet->getCell('A2')->getValue());
             self::assertSame('4PX', $sheet->getCell('C2')->getValue());
             self::assertSame('buyer@example.test', $sheet->getCell('H2')->getValue());
